@@ -26,26 +26,10 @@ This is a plugin for [Eventyay](https://github.com/fossasia/eventyay) that enabl
 This repository enforces code style guidelines via CI. You can run checks locally by installing the development dependencies:
 
 ```bash
-pip install flake8 ruff black
-```
+pip install pre-commit ruff black
+pre-commit install
 
-### Run Checks
-```bash
-black --check .
-ruff check .
-flake8 .
-```
-
-### Auto-formatting
-You can automatically fix formatting and simple lint errors with:
-```bash
-black .
-ruff check --fix .
-```
-
-To automatically check for style issues before you commit, you can run:
-```bash
-./.install-hooks.sh
+pre-commit run --all-files
 ```
 
 ## License

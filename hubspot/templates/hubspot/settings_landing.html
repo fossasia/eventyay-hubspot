@@ -9,15 +9,19 @@
 
     <div class="panel panel-default">
         <div class="panel-heading">
-            <h3 class="panel-title">{% translate "Connect to HubSpot" %}</h3>
+            <h3 class="panel-title">{% translate "HubSpot Connection" %}</h3>
         </div>
         <div class="panel-body">
-            <p>{% translate "This event is not yet connected to a HubSpot account." %}</p>
-            <div>
-                <a href="#" class="btn btn-primary">
-                    {% translate "Request access" %}
-                </a>
-            </div>
+            {% if is_connected %}
+                <p class="text-success">{% translate "This event is currently connected to a HubSpot account." %}</p>
+            {% else %}
+                <p>{% translate "This event is not yet connected to a HubSpot account." %}</p>
+                <div>
+                    <a href="{% url "plugins:hubspot:connect" organizer=request.event.organizer.slug event=request.event.slug %}" class="btn btn-primary">
+                        {% translate "Connect to HubSpot" %}
+                    </a>
+                </div>
+            {% endif %}
         </div>
     </div>
 {% endblock %}

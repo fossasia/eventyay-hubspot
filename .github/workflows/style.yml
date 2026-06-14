@@ -13,8 +13,8 @@ on:
       - 'hubspot/static/**'
 
 jobs:
-  ruff:
-    name: ruff
+  pre-commit:
+    name: pre-commit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -30,51 +30,7 @@ jobs:
             ${{ runner.os }}-pip-
       - name: Install pretix
         run: pip3 install pretix
-      - name: Install Dependencies
-        run: pip3 install ruff -Ue .
-      - name: Run ruff
-        run: ruff check .
-  flake:
-    name: flake8
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v1
-        with:
-          python-version: 3.11
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/setup.py') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-      - name: Install pretix
-        run: pip3 install pretix
-      - name: Install Dependencies
-        run: pip3 install flake8 -Ue .
-      - name: Run flake8
-        run: flake8 .
-        working-directory: .
-  black:
-    name: black
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v1
-        with:
-          python-version: 3.11
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/setup.py') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-      - name: Install pretix
-        run: pip3 install pretix
-      - name: Install Dependencies
-        run: pip3 install black -Ue .
-      - name: Run black
-        run: black --check .
-        working-directory: .
+      - name: Install pre-commit
+        run: pip3 install pre-commit
+      - name: Run pre-commit
+        run: pre-commit run --all-files

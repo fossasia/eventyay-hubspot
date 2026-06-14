@@ -1,5 +1,5 @@
 import pytest
-from eventyay.base.models import Event, Organizer
+from eventyay.base.models import Event, Organizer, Team, User
 from django.utils.timezone import now
 from datetime import timedelta
 
@@ -19,4 +19,29 @@ def event(organizer):
         date_to=now() + timedelta(days=1),
         currency="USD",
         live=True,
+        plugins="hubspot",
     )
+
+
+@pytest.fixture
+def user():
+    return User.objects.create_user("dummy@dummy.dummy", "dummy")
+
+
+@pytest.fixture
+def logged_in_client(client, user):
+    client.force_login(user)
+    return client
+
+
+@pytest.fixture
+def logged_in_organizer_client(client, user, organizer, event):
+    team = Team.objects.create(
+        organizer=organizer,
+        name="Test Team",
+        can_change_event_settings=True,
+        all_events=True,
+    )
+    team.members.add(user)
+    client.force_login(user)
+    return client
