@@ -121,23 +121,33 @@ class EventHubSpotCallbackView(View):
                 _("You do not have permission to view this content.")
             )
 
+        if not code:
+            messages.error(request, _("No authorization code provided."))
+            return redirect(settings_url)
+
         redirect_uri = os.environ.get("HUBSPOT_REDIRECT_URI", "")
         if not redirect_uri:
             redirect_uri = request.build_absolute_uri(
                 reverse("plugins:hubspot:callback")
             )
 
-        response = requests.post(
-            "https://api.hubapi.com/oauth/v1/token",
-            data={
-                "grant_type": "authorization_code",
-                "client_id": os.environ.get("HUBSPOT_CLIENT_ID", ""),
-                "client_secret": os.environ.get("HUBSPOT_CLIENT_SECRET", ""),
-                "redirect_uri": redirect_uri,
-                "code": code,
-            },
-            timeout=15,
-        )
+        try:
+            response = requests.post(
+                "https://api.hubapi.com/oauth/v1/token",
+                data={
+                    "grant_type": "authorization_code",
+                    "client_id": os.environ.get("HUBSPOT_CLIENT_ID", ""),
+                    "client_secret": os.environ.get("HUBSPOT_CLIENT_SECRET", ""),
+                    "redirect_uri": redirect_uri,
+                    "code": code,
+                },
+                timeout=15,
+            )
+        except requests.RequestException:
+            messages.error(
+                request, _("Network error while trying to connect to HubSpot.")
+            )
+            return redirect(settings_url)
 
         if not response.ok:
             messages.error(request, _("Failed to exchange token with HubSpot."))
@@ -149,7 +159,7 @@ class EventHubSpotCallbackView(View):
             now() + datetime.timedelta(seconds=expires_in) if expires_in else None
         )
 
-        with scope(event=event):
+        with scope(organizer=event.organizer):
             HubSpotOAuthToken.objects.update_or_create(
                 event=event,
                 defaults={
