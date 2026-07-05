@@ -61,7 +61,6 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "W"]
 ignore = ["B904", "E501"]
-unfixable = ["B"]
 
 [tool.ruff.format]
 quote-style = "double"
