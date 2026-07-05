@@ -1,20 +1,22 @@
+from datetime import timedelta
+
+from django.contrib.contenttypes.models import ContentType
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 from django.urls import resolve, reverse
+from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
-from django.contrib.contenttypes.models import ContentType
 from eventyay.base.models import Order, OrderPosition
 from eventyay.base.signals import periodic_task
 from eventyay.control.signals import nav_event
+
 from .models import (
-    ObjectTypeMapping,
+    AuditLog,
     HubSpotFieldMapping,
     HubSpotObjectMapping,
-    AuditLog,
+    ObjectTypeMapping,
     SyncLog,
 )
-from django.utils.timezone import now
-from datetime import timedelta
 
 
 @receiver(nav_event, dispatch_uid="hubspot_nav")

@@ -1,9 +1,9 @@
 import datetime
 import uuid
-import requests
 from unittest import mock
 
 import pytest
+import requests
 from django.utils.timezone import now
 from django_scopes import scope
 
@@ -13,9 +13,9 @@ from hubspot.models import (
     HubSpotPropertySyncState,
 )
 from hubspot.services import (
-    get_valid_hubspot_token,
-    get_hubspot_properties,
     HubSpotFetchError,
+    get_hubspot_properties,
+    get_valid_hubspot_token,
 )
 
 

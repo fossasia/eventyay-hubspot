@@ -1,6 +1,7 @@
 import pytest
 from django.urls import reverse
 from django_scopes import scope
+
 from hubspot.models import HubSpotOAuthToken
 
 

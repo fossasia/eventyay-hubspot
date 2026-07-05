@@ -6,25 +6,24 @@ import urllib.parse
 
 import requests
 from django.contrib import messages
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import PermissionDenied
+from django.forms import modelformset_factory
 from django.shortcuts import redirect
 from django.urls import reverse
-from django.core.exceptions import PermissionDenied
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import ListView, TemplateView, View
 from django_scopes import scope
 from eventyay.base.models import Event, Order, OrderPosition
-
 from eventyay.control.permissions import EventPermissionRequiredMixin
 from eventyay.control.views import PaginationMixin
 
-from django.contrib.contenttypes.models import ContentType
-from django.forms import modelformset_factory
-
+from .field_discovery import get_available_fields
 from .forms import (
-    HubSpotLogFilterForm,
     BaseHubSpotFieldMappingFormSet,
     HubSpotFieldMappingForm,
+    HubSpotLogFilterForm,
     ObjectTypeMappingFormSet,
 )
 from .models import (
@@ -32,15 +31,14 @@ from .models import (
     AuditLog,
     HubSpotFieldMapping,
     HubSpotOAuthToken,
-    ObjectTypeMapping,
     HubSpotProperty,
     HubSpotPropertySyncState,
+    ObjectTypeMapping,
     SyncAction,
     SyncDirection,
     SyncLog,
     SyncStatus,
 )
-from .field_discovery import get_available_fields
 from .services import get_hubspot_properties, sync_hubspot_properties
 from .utils import get_hubspot_activity_logs
 

@@ -1,12 +1,12 @@
 import base64
 import hashlib
+from datetime import datetime, time
 from functools import lru_cache
 
 from cryptography.fernet import Fernet
 from django.conf import settings
-from django.utils.translation import gettext_lazy as _
 from django.utils.timezone import make_aware
-from datetime import datetime, time
+from django.utils.translation import gettext_lazy as _
 
 
 @lru_cache(maxsize=1)

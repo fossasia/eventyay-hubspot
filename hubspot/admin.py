@@ -4,8 +4,8 @@ from .models import (
     AuditLog,
     HubSpotEventSettings,
     HubSpotFieldMapping,
-    HubSpotObjectMapping,
     HubSpotOAuthToken,
+    HubSpotObjectMapping,
     ObjectTypeMapping,
     SyncLog,
 )

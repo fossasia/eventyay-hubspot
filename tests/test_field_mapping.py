@@ -1,11 +1,12 @@
+from unittest.mock import patch
+
 import pytest
 from django.contrib.contenttypes.models import ContentType
 from django.urls import reverse
-
+from django_scopes import scope, scopes_disabled
 from eventyay.base.models import Order
-from hubspot.models import HubSpotFieldMapping, SyncMode, ObjectTypeMapping
-from django_scopes import scopes_disabled, scope
-from unittest.mock import patch
+
+from hubspot.models import HubSpotFieldMapping, ObjectTypeMapping, SyncMode
 
 
 @pytest.fixture(autouse=True)

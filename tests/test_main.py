@@ -1,7 +1,6 @@
 import pytest
-from django.db import IntegrityError, transaction
-
 from django.contrib.contenttypes.models import ContentType
+from django.db import IntegrityError, transaction
 
 from hubspot.models import (
     HubSpotEventSettings,

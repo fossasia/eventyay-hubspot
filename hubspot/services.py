@@ -1,7 +1,8 @@
 import datetime
+import logging
 import os
 import uuid
-import logging
+
 import requests
 from django.db import transaction
 from django.utils.timezone import now

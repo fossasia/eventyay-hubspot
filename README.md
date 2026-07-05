@@ -23,13 +23,24 @@ This is a plugin for [Eventyay](https://github.com/fossasia/eventyay) that enabl
 
 ## Code Style & Linting
 
-This repository enforces code style guidelines via CI. You can run checks locally by installing the development dependencies:
+This repository uses [Ruff](https://docs.astral.sh/ruff/) for Python linting, import sorting, and formatting.
+
+You can run checks locally:
 
 ```bash
-pip install pre-commit ruff black
+pip install pre-commit ruff
 pre-commit install
 
 pre-commit run --all-files
+```
+
+To run Ruff directly:
+
+```bash
+ruff check .
+ruff check . --fix
+ruff format .
+ruff format --check .
 ```
 
 ## License

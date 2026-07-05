@@ -1,11 +1,12 @@
 from django.urls import path
+
 from hubspot.views import (
     EventHubSpotCallbackView,
     EventHubSpotConnectView,
     EventHubSpotDisconnectView,
     EventHubSpotFieldMappingView,
-    EventHubSpotSettingsView,
     EventHubSpotLogView,
+    EventHubSpotSettingsView,
 )
 
 urlpatterns = [

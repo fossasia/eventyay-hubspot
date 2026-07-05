@@ -2,7 +2,7 @@ import pytest
 from django.urls import reverse
 from django_scopes import scope
 
-from hubspot.models import ObjectTypeMapping, HubSpotOAuthToken
+from hubspot.models import HubSpotOAuthToken, ObjectTypeMapping
 
 
 def _settings_url(organizer, event):

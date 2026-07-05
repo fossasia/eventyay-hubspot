@@ -54,6 +54,20 @@ namespaces = false
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "eventyay.config.settings"
 
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "W"]
+ignore = ["B904", "E501"]
+unfixable = ["B"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
 [tool.coverage.run]
 source = ["hubspot"]
 omit = [

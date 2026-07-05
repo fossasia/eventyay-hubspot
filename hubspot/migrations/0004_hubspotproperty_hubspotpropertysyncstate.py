@@ -5,7 +5,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ("base", "0031_migrate_meta_noindex"),
         ("hubspot", "0003_objecttypemapping"),

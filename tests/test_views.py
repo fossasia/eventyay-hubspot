@@ -1,7 +1,9 @@
+from unittest import mock
+
 import pytest
 from django.urls import reverse
-from unittest import mock
 from django_scopes import scope
+
 from hubspot.models import HubSpotOAuthToken
 
 
@@ -75,8 +77,9 @@ def test_hubspot_disconnect_view_connected(
     mock_response.ok = True
     mock_delete.return_value = mock_response
 
-    from hubspot.models import HubSpotProperty, HubSpotPropertySyncState
     import uuid
+
+    from hubspot.models import HubSpotProperty, HubSpotPropertySyncState
 
     with scope(organizer=event.organizer):
         batch = uuid.uuid4()

@@ -3,14 +3,15 @@ from django.contrib.contenttypes.models import ContentType
 from django.urls import reverse
 from django_scopes import scope
 from eventyay.base.models import Event
+
 from hubspot.models import (
-    AuditLog,
-    SyncLog,
     AuditAction,
+    AuditLog,
+    HubSpotObjectMapping,
     SyncAction,
     SyncDirection,
+    SyncLog,
     SyncStatus,
-    HubSpotObjectMapping,
 )
 
 
@@ -54,7 +55,6 @@ def test_hubspot_logs_view_all_entries(
     settings.SITE_URL = "https://testserver"
 
     with scope(organizer=event.organizer):
-
         AuditLog.objects.create(
             organizer=event.organizer,
             event=event,
@@ -175,8 +175,9 @@ def test_hubspot_logs_view_permission_denied(
 def test_hubspot_logs_view_order_and_position_synced_formatting(
     logged_in_organizer_client, organizer, event, settings
 ):
-    from django.utils.timezone import now
     from datetime import timedelta
+
+    from django.utils.timezone import now
     from eventyay.base.models import Order, OrderPosition, Product
 
     settings.SITE_URL = "https://testserver"
