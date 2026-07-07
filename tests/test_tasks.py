@@ -336,3 +336,124 @@ def test_permanent_error_no_retry(mock_create, mock_event, object_mapping, order
     logs = SyncLog.objects.filter(event=mock_event)
     assert logs.count() == 1
     assert logs.first().status == SyncStatus.FAILED
+
+
+@pytest.mark.django_db
+@mock.patch("hubspot.tasks.cache.add")
+@mock.patch("hubspot.tasks.sync_order_to_hubspot.retry")
+def test_sync_order_lock(mock_retry, mock_cache_add, mock_event, object_mapping, order):
+    # Simulate that the lock is already held
+    mock_cache_add.return_value = False
+    mock_retry.side_effect = Retry()
+
+    with pytest.raises(Retry):
+        sync_order_to_hubspot(order.id, mock_event.id)
+
+    mock_retry.assert_called_once()
+    assert mock_retry.call_args[1]["countdown"] == 10
+    mock_cache_add.assert_called_once_with(
+        f"hubspot_sync_running_{order.id}", "1", timeout=300
+    )
+
+
+@pytest.mark.django_db
+@mock.patch("hubspot.tasks.sync_order_to_hubspot.apply_async")
+def test_recovery_sweep_missing(mock_apply_async, mock_event, object_mapping, order):
+    order.status = order.STATUS_PAID
+    order.save()
+
+    from hubspot.tasks import hubspot_recovery_sweep
+
+    # The order has no HubSpotObjectMapping at all.
+    hubspot_recovery_sweep()
+
+    # The order should be enqueued
+    mock_apply_async.assert_called_once()
+    assert mock_apply_async.call_args[1]["args"] == [order.id, mock_event.id]
+
+
+@pytest.mark.django_db
+@mock.patch("hubspot.tasks.sync_order_to_hubspot.apply_async")
+def test_recovery_sweep_failed(mock_apply_async, mock_event, object_mapping, order):
+    order.status = order.STATUS_PAID
+    order.save()
+
+    ct = ContentType.objects.get_for_model(order)
+
+    mapping = HubSpotObjectMapping.objects.create(
+        event=mock_event,
+        content_type=ct,
+        object_id=order.id,
+        hubspot_object_type="contacts",
+    )
+    # The last_synced_at is None, but there is a FAILED SyncLog
+    SyncLog.objects.create(
+        event=mock_event,
+        object_mapping=mapping,
+        action="create",
+        direction="push",
+        status=SyncStatus.FAILED,
+    )
+
+    from hubspot.tasks import hubspot_recovery_sweep
+
+    hubspot_recovery_sweep()
+
+    mock_apply_async.assert_called_once()
+    assert mock_apply_async.call_args[1]["args"] == [order.id, mock_event.id]
+
+
+@pytest.mark.django_db
+@mock.patch("hubspot.tasks.sync_order_to_hubspot.apply_async")
+def test_recovery_sweep_success_skipped(
+    mock_apply_async, mock_event, object_mapping, order
+):
+    order.status = order.STATUS_PAID
+    order.save()
+
+    from django.utils.timezone import now
+
+    ct = ContentType.objects.get_for_model(order)
+
+    mapping = HubSpotObjectMapping.objects.create(
+        event=mock_event,
+        content_type=ct,
+        object_id=order.id,
+        hubspot_object_type="contacts",
+        last_synced_at=now(),
+        hubspot_object_id="hub_123",
+    )
+    # Latest log is SUCCESS
+    SyncLog.objects.create(
+        event=mock_event,
+        object_mapping=mapping,
+        action="create",
+        direction="push",
+        status=SyncStatus.SUCCESS,
+    )
+
+    from hubspot.tasks import hubspot_recovery_sweep
+
+    hubspot_recovery_sweep()
+
+    # The order is fully synced, should NOT be queued
+    mock_apply_async.assert_not_called()
+
+
+@pytest.mark.django_db
+@mock.patch("hubspot.tasks.sync_order_to_hubspot.apply_async")
+def test_recovery_sweep_ignores_disabled(
+    mock_apply_async, mock_event, object_mapping, order
+):
+    settings = HubSpotEventSettings.objects.get(event=mock_event)
+    settings.sync_enabled = False
+    settings.save()
+
+    order.status = order.STATUS_PAID
+    order.save()
+
+    from hubspot.tasks import hubspot_recovery_sweep
+
+    hubspot_recovery_sweep()
+
+    mock_apply_async.assert_not_called()

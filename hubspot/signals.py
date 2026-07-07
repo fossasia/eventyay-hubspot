@@ -10,7 +10,7 @@ from django.db import transaction
 from eventyay.control.signals import nav_event
 from django_scopes import scope
 from eventyay.base.signals import order_placed, order_paid, order_canceled
-from .tasks import sync_order_to_hubspot
+from .tasks import sync_order_to_hubspot, hubspot_recovery_sweep
 from .models import (
     HubSpotEventSettings,
     ObjectTypeMapping,
@@ -122,3 +122,8 @@ def clear_audit_logs(sender, **kwargs):
     threshold = now() - timedelta(days=days)
     AuditLog.objects.filter(created_at__lt=threshold).delete()
     SyncLog.objects.filter(created_at__lt=threshold).delete()
+
+
+@receiver(periodic_task, dispatch_uid="hubspot_recovery_sweep")
+def trigger_recovery_sweep(sender, **kwargs):
+    hubspot_recovery_sweep.apply_async()

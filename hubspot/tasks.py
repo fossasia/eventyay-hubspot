@@ -3,7 +3,9 @@ from typing import Any, Dict
 
 from celery import shared_task
 from django.contrib.contenttypes.models import ContentType
+from django.core.cache import cache
 from django.db import transaction
+from django.db.models import F, Q
 from django.utils.timezone import now
 from django_scopes import scope, scopes_disabled
 from django.conf import settings
@@ -285,51 +287,58 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
     """
     Main sync task that resolves fields, applies sync modes, and pushes to HubSpot.
     """
+    lock_key = f"hubspot_sync_running_{order_id}"
+    if not cache.add(lock_key, "1", timeout=60 * 5):
+        raise self.retry(countdown=10)
+
     try:
-        with scopes_disabled():
-            event = Event.objects.get(id=event_id)
-    except Event.DoesNotExist:
-        return
-
-    with scope(organizer=event.organizer):
-        settings = HubSpotEventSettings.objects.filter(event=event).first()
-        if not settings or not settings.sync_enabled:
-            return
-
-        if not get_valid_hubspot_token(event):
-            return
-
         try:
-            order = (
-                Order.objects.select_related("invoice_address")
-                .prefetch_related(
-                    "positions__product",
-                    "positions__voucher",
-                    "positions__answers__question",
+            with scopes_disabled():
+                event = Event.objects.get(id=event_id)
+        except Event.DoesNotExist:
+            return
+
+        with scope(organizer=event.organizer):
+            settings = HubSpotEventSettings.objects.filter(event=event).first()
+            if not settings or not settings.sync_enabled:
+                return
+
+            if not get_valid_hubspot_token(event):
+                return
+
+            try:
+                order = (
+                    Order.objects.select_related("invoice_address")
+                    .prefetch_related(
+                        "positions__product",
+                        "positions__voucher",
+                        "positions__answers__question",
+                    )
+                    .get(id=order_id, event=event)
                 )
-                .get(id=order_id, event=event)
-            )
-        except Order.DoesNotExist:
-            return
+            except Order.DoesNotExist:
+                return
 
-        active_mappings = ObjectTypeMapping.objects.filter(event=event)
+            active_mappings = ObjectTypeMapping.objects.filter(event=event)
 
-        try:
-            for object_mapping_config in active_mappings:
-                objects_to_sync = []
-                if object_mapping_config.eventyay_object_type == "order":
-                    objects_to_sync = [order]
-                elif object_mapping_config.eventyay_object_type == "order_position":
-                    objects_to_sync = list(order.positions.all())
+            try:
+                for object_mapping_config in active_mappings:
+                    objects_to_sync = []
+                    if object_mapping_config.eventyay_object_type == "order":
+                        objects_to_sync = [order]
+                    elif object_mapping_config.eventyay_object_type == "order_position":
+                        objects_to_sync = list(order.positions.all())
 
-                for obj in objects_to_sync:
-                    _sync_single_object(event, object_mapping_config, obj)
-        except HubSpotTransientError as e:
-            delay = 2**self.request.retries
-            retry_after = getattr(e, "retry_after_seconds", None)
-            if retry_after:
-                delay = max(delay, retry_after)
-            raise self.retry(exc=e, countdown=delay)
+                    for obj in objects_to_sync:
+                        _sync_single_object(event, object_mapping_config, obj)
+            except HubSpotTransientError as e:
+                delay = 2**self.request.retries
+                retry_after = getattr(e, "retry_after_seconds", None)
+                if retry_after:
+                    delay = max(delay, retry_after)
+                raise self.retry(exc=e, countdown=delay)
+    finally:
+        cache.delete(lock_key)
 
 
 def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
@@ -556,3 +565,109 @@ def sync_all_mappings_task(self, event_id: int):
 
     for order_id in order_ids:
         sync_order_to_hubspot.apply_async(args=[order_id, event_id], countdown=0)
+
+
+@shared_task
+def hubspot_recovery_sweep():
+    """
+    Finds and re-queues HubSpot syncs that failed, are incomplete, or never ran.
+    """
+    with scopes_disabled():
+        # Iterate over all events with sync_enabled and valid token
+        events = list(Event.objects.filter(hubspoteventsettings__sync_enabled=True))
+
+    for event in events:
+        if not get_valid_hubspot_token(event):
+            continue
+
+        with scopes_disabled():
+            active_mappings = list(ObjectTypeMapping.objects.filter(event=event))
+
+        if not active_mappings:
+            continue
+
+        _sweep_event(event, active_mappings)
+
+
+def _sweep_event(event: Event, active_mappings: list):
+    with scopes_disabled():
+        paid_orders = Order.objects.filter(event=event, status=Order.STATUS_PAID)
+        order_ct = ContentType.objects.get_for_model(Order)
+        order_pos_ct = ContentType.objects.get_for_model(OrderPosition)
+
+        orders_to_sync = set()
+
+        for config in active_mappings:
+            if config.eventyay_object_type == "order":
+                ct = order_ct
+
+                # Missing completely
+                synced = HubSpotObjectMapping.objects.filter(
+                    event=event,
+                    content_type=ct,
+                    hubspot_object_type=config.hubspot_object_type,
+                ).values_list("object_id", flat=True)
+
+                missing = paid_orders.exclude(id__in=synced).values_list(
+                    "id", flat=True
+                )
+                orders_to_sync.update(missing)
+
+                # Failed / Incomplete
+                failed = (
+                    HubSpotObjectMapping.objects.filter(
+                        event=event,
+                        content_type=ct,
+                        hubspot_object_type=config.hubspot_object_type,
+                        synclog__status=SyncStatus.FAILED,
+                    )
+                    .filter(
+                        Q(last_synced_at__isnull=True)
+                        | Q(synclog__created_at__gt=F("last_synced_at"))
+                    )
+                    .values_list("object_id", flat=True)
+                )
+
+                failed_paid = paid_orders.filter(id__in=failed).values_list(
+                    "id", flat=True
+                )
+                orders_to_sync.update(failed_paid)
+
+            elif config.eventyay_object_type == "order_position":
+                ct = order_pos_ct
+                paid_positions = OrderPosition.objects.filter(
+                    order__event=event, order__status=Order.STATUS_PAID
+                )
+
+                synced = HubSpotObjectMapping.objects.filter(
+                    event=event,
+                    content_type=ct,
+                    hubspot_object_type=config.hubspot_object_type,
+                ).values_list("object_id", flat=True)
+
+                missing_pos = paid_positions.exclude(id__in=synced)
+                orders_to_sync.update(missing_pos.values_list("order_id", flat=True))
+
+                failed = (
+                    HubSpotObjectMapping.objects.filter(
+                        event=event,
+                        content_type=ct,
+                        hubspot_object_type=config.hubspot_object_type,
+                        synclog__status=SyncStatus.FAILED,
+                    )
+                    .filter(
+                        Q(last_synced_at__isnull=True)
+                        | Q(synclog__created_at__gt=F("last_synced_at"))
+                    )
+                    .values_list("object_id", flat=True)
+                )
+
+                failed_pos = paid_positions.filter(id__in=failed)
+                orders_to_sync.update(failed_pos.values_list("order_id", flat=True))
+
+        for order_id in orders_to_sync:
+            cache_key = f"hubspot_sync_enqueued_{order_id}"
+            if cache.add(cache_key, "1", timeout=5):
+                sync_order_to_hubspot.apply_async(
+                    args=[order_id, event.id], countdown=5
+                )
