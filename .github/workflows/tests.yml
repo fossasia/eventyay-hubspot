@@ -40,14 +40,14 @@ jobs:
 
     steps:
       - name: Checkout eventyay_hubspot plugin
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Clone eventyay
         run: |
           git clone https://github.com/fossasia/eventyay.git ../eventyay
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
