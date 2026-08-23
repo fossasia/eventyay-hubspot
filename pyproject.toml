@@ -15,7 +15,11 @@ maintainers = [
 dependencies = [
     "cryptography>=50.0.0",
     "requests",
-    "python-dotenv"
+]
+
+[project.optional-dependencies]
+dev = [
+    "python-dotenv",
 ]
 
 [project.entry-points."pretix.plugin"]

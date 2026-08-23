@@ -2,7 +2,6 @@ from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.translation import gettext_lazy as _
-from dotenv import load_dotenv
 
 from . import __version__
 
@@ -28,28 +27,19 @@ class EventyayHubspotPluginApp(PluginConfig):
 
     def ready(self):
         from . import signals  # NOQA
-        from django.conf import settings
         import logging
 
         logger = logging.getLogger(__name__)
 
+        # .env.hubspot is only for local development convenience.
+        # In production, configure credentials via the admin UI (Global Settings).
         plugin_dir = Path(__file__).resolve().parent.parent
-        project_root = getattr(settings, "PROJECT_ROOT", plugin_dir)
-        env_paths = [
-            plugin_dir / ".env.hubspot",
-            project_root / ".env",
-            Path.cwd() / ".env",
-            project_root.parent / ".env.dev",
-            project_root.parent / ".env",
-            plugin_dir / ".env",
-        ]
-
-        env_loaded = False
-        for env_path in env_paths:
-            if env_path.exists():
+        env_path = plugin_dir / ".env.hubspot"
+        if env_path.exists():
+            try:
+                from dotenv import load_dotenv
+            except ImportError:
+                logger.warning("python-dotenv is not installed; skipping .env.hubspot loading")
+            else:
                 load_dotenv(dotenv_path=env_path)
-                logger.info(f"HubSpot plugin loaded environment variables from: {env_path}")
-                env_loaded = True
-
-        if not env_loaded:
-            logger.error("HubSpot plugin: No .env file found.")
+                logger.info(f"HubSpot plugin loaded dev environment variables from: {env_path}")
