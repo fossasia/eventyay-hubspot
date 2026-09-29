@@ -11,6 +11,8 @@ from django_scopes import scope
 from eventyay.base.models import Order, OrderPosition
 from eventyay.base.settings import GlobalSettingsObject
 
+from hubspot.operational_log import logged_request
+
 from .models import (
     AuditAction,
     AuditLog,
@@ -136,7 +138,7 @@ def sync_hubspot_properties(event, object_type: str, organizer=None) -> list[dic
             params["after"] = cursor
 
         try:
-            response = requests.get(base_url, headers=headers, params=params, timeout=15)
+            response = logged_request("hubspot", "GET", base_url, headers=headers, params=params, timeout=15)
             if response.status_code == 429:
                 retry_after = response.headers.get("Retry-After")
                 e = HubSpotFetchError("Rate limited by HubSpot")
@@ -203,7 +205,7 @@ def _refresh_token_record(token_obj, event_or_organizer, is_organizer=False):
 
     try:
         gs = GlobalSettingsObject()
-        response = requests.post(
+        response = logged_request("hubspot", "POST",
             "https://api.hubapi.com/oauth/v1/token",
             data={
                 "grant_type": "refresh_token",

@@ -3,6 +3,8 @@ import re
 
 import requests
 
+from hubspot.operational_log import logged_request
+
 from .services import get_valid_hubspot_token
 
 
@@ -109,7 +111,7 @@ def update_record(event, object_type: str, record_id: str, properties: dict) -> 
     payload = {"properties": properties}
 
     try:
-        response = requests.patch(url, headers=headers, json=payload, timeout=15)
+        response = logged_request("hubspot", "PATCH", url, headers=headers, json=payload, timeout=15)
     except requests.exceptions.Timeout as e:
         raise HubSpotTransientError(f"Request to HubSpot timed out: {e}")
     except requests.exceptions.ConnectionError as e:
@@ -141,7 +143,7 @@ def create_record(event, object_type: str, properties: dict) -> str:
     payload = {"properties": properties}
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        response = logged_request("hubspot", "POST", url, headers=headers, json=payload, timeout=15)
     except requests.exceptions.Timeout as e:
         raise HubSpotTransientError(f"Request to HubSpot timed out: {e}")
     except requests.exceptions.ConnectionError as e:
@@ -200,7 +202,7 @@ def get_record(event, object_type: str, record_id: str, properties: list) -> dic
     params = {"properties": ",".join(properties)} if properties else {}
 
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=15)
+        response = logged_request("hubspot", "GET", url, headers=headers, params=params, timeout=15)
     except requests.exceptions.Timeout as e:
         raise HubSpotTransientError(f"Request to HubSpot timed out: {e}")
     except requests.exceptions.ConnectionError as e:
