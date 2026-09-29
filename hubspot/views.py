@@ -291,7 +291,9 @@ class EventHubSpotCallbackView(View):
         gs = GlobalSettingsObject()
         redirect_uri = request.build_absolute_uri(reverse("plugins:hubspot:callback"))
 
-        response = logged_request("hubspot", "POST",
+        response = logged_request(
+            "hubspot",
+            "POST",
             "https://api.hubapi.com/oauth/v1/token",
             data={
                 "grant_type": "authorization_code",
@@ -317,7 +319,9 @@ class EventHubSpotCallbackView(View):
         access_token = data.get("access_token", "")
         if access_token:
             try:
-                info_resp = logged_request("hubspot", "GET",
+                info_resp = logged_request(
+                    "hubspot",
+                    "GET",
                     f"https://api.hubapi.com/oauth/v1/access-tokens/{access_token}",
                     timeout=10,
                 )
@@ -606,14 +610,13 @@ class EventHubSpotFieldMappingView(EventPermissionRequiredMixin, TemplateView):
                 request.event.slug,
                 e,
             )
-            sync_error = _("Could not retrieve HubSpot properties. " "Please check your connection and try again.")
+            sync_error = _("Could not retrieve HubSpot properties. Please check your connection and try again.")
             hubspot_properties = []
 
         error_key = f"hubspot_properties_error_evt_{request.event.id}_{mapping.hubspot_object_type}"
         if cache.get(error_key):
             sync_error = _(
-                "HubSpot properties sync failed repeatedly. "
-                "HubSpot may be unreachable or you might need to reconnect."
+                "HubSpot properties sync failed repeatedly. HubSpot may be unreachable or you might need to reconnect."
             )
 
         is_fetching_properties = (
@@ -1471,14 +1474,13 @@ class OrganizerHubSpotDefaultMappingView(OrganizerPermissionRequiredMixin, Templ
                 request.organizer.slug,
                 e,
             )
-            sync_error = _("Could not retrieve HubSpot properties. " "Please check your connection and try again.")
+            sync_error = _("Could not retrieve HubSpot properties. Please check your connection and try again.")
             hubspot_properties = []
 
         error_key = f"hubspot_properties_error_org_{request.organizer.id}_{mapping.hubspot_object_type}"
         if cache.get(error_key):
             sync_error = _(
-                "HubSpot properties sync failed repeatedly. "
-                "HubSpot may be unreachable or you might need to reconnect."
+                "HubSpot properties sync failed repeatedly. HubSpot may be unreachable or you might need to reconnect."
             )
 
         is_fetching_properties = (
