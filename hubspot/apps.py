@@ -26,6 +26,9 @@ class EventyayHubspotPluginApp(PluginConfig):
         category = "INTEGRATION"
 
     def ready(self):
+        from .operational_log import log_plugin_loaded
+
+        log_plugin_loaded("hubspot")
         from . import signals  # NOQA
         import logging
 

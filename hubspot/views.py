@@ -27,6 +27,8 @@ from eventyay.control.views.organizer_views.organizer_detail_view_mixin import (
     OrganizerDetailViewMixin,
 )
 
+from hubspot.operational_log import logged_request
+
 from .field_discovery import get_available_fields
 from .forms import (
     BaseHubSpotFieldMappingFormSet,
@@ -289,7 +291,7 @@ class EventHubSpotCallbackView(View):
         gs = GlobalSettingsObject()
         redirect_uri = request.build_absolute_uri(reverse("plugins:hubspot:callback"))
 
-        response = requests.post(
+        response = logged_request("hubspot", "POST",
             "https://api.hubapi.com/oauth/v1/token",
             data={
                 "grant_type": "authorization_code",
@@ -315,7 +317,7 @@ class EventHubSpotCallbackView(View):
         access_token = data.get("access_token", "")
         if access_token:
             try:
-                info_resp = requests.get(
+                info_resp = logged_request("hubspot", "GET",
                     f"https://api.hubapi.com/oauth/v1/access-tokens/{access_token}",
                     timeout=10,
                 )
@@ -407,7 +409,7 @@ class EventHubSpotDisconnectView(EventPermissionRequiredMixin, View):
             try:
                 # We use the refresh token to revoke, as per HubSpot docs.
                 revoke_url = f"https://api.hubapi.com/oauth/v1/refresh-tokens/{token.refresh_token}"
-                response = requests.delete(revoke_url, timeout=10)
+                response = logged_request("hubspot", "DELETE", revoke_url, timeout=10)
                 if not response.ok:
                     logger = logging.getLogger(__name__)
                     logger.warning(f"Failed to revoke HubSpot token: {response.status_code} {response.text}")
@@ -1383,7 +1385,7 @@ class OrganizerHubSpotDisconnectView(OrganizerPermissionRequiredMixin, View):
         # Attempt to revoke at HubSpot
         try:
             revoke_url = f"https://api.hubapi.com/oauth/v1/refresh-tokens/{token.refresh_token}"
-            response = requests.delete(revoke_url, timeout=10)
+            response = logged_request("hubspot", "DELETE", revoke_url, timeout=10)
             if not response.ok:
                 logger = logging.getLogger(__name__)
                 logger.warning(f"Failed to revoke HubSpot organizer token: {response.status_code} {response.text}")
