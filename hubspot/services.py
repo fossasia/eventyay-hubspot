@@ -205,7 +205,9 @@ def _refresh_token_record(token_obj, event_or_organizer, is_organizer=False):
 
     try:
         gs = GlobalSettingsObject()
-        response = logged_request("hubspot", "POST",
+        response = logged_request(
+            "hubspot",
+            "POST",
             "https://api.hubapi.com/oauth/v1/token",
             data={
                 "grant_type": "refresh_token",
