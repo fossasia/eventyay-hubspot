@@ -30,6 +30,7 @@ from .models import (
     SyncMode,
     SyncStatus,
 )
+from .operational_log import OUTCOME_SUCCESS, log_operation, traced_job
 from .services import (
     HubSpotFetchError,
     get_hubspot_properties,
@@ -288,6 +289,7 @@ def _convert_value(value: Any, data_type: str) -> Any:
 
 
 @shared_task(bind=True, max_retries=3)
+@traced_job("hubspot.sync_order")
 def sync_order_to_hubspot(self, order_id: int, event_id: int):
     """
     Main sync task that resolves fields, applies sync modes, and pushes to HubSpot.
@@ -360,6 +362,8 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
             if retry_after:
                 delay = max(delay, retry_after)
             raise self.retry(exc=e, countdown=delay)
+
+        log_operation("sync.order", OUTCOME_SUCCESS, backend="hubspot", event_id=event_id, order_id=order_id)
 
 
 def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
@@ -555,6 +559,7 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
 
 
 @shared_task(bind=True, max_retries=3)
+@traced_job("hubspot.sync_all")
 def sync_all_mappings_task(self, event_id: int):
     """
     Background task to enqueue sync_order_to_hubspot for all orders of an event,
@@ -573,6 +578,7 @@ def sync_all_mappings_task(self, event_id: int):
 
 
 @shared_task(bind=True, max_retries=3)
+@traced_job("hubspot.refresh_properties")
 def refresh_hubspot_properties_task(self, event_id: int | None, object_type: str, organizer_id: int | None = None):
     """
     Background task to refresh HubSpot properties.
