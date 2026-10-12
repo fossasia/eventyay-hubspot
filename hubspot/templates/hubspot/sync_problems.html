@@ -3,6 +3,10 @@
 
 {% block title %}{% translate "HubSpot Sync Problems" %} :: {% endblock %}
 
+{% block custom_header %}
+    <link rel="stylesheet" type="text/css" href="{% static "hubspot/css/common.css" %}">
+{% endblock %}
+
 {% block content %}
     <h1>
         <a href="{% url 'plugins:hubspot:hubspot' organizer=request.event.organizer.slug event=request.event.slug %}" class="btn btn-link btn-lg">
@@ -42,9 +46,9 @@
     </div>
 
     {% if has_failed %}
-    <div class="row" style="margin-bottom: 20px;">
+    <div class="row hubspot-sync-actions">
         <div class="col-md-12 text-right">
-            <form method="post" action="{% url 'plugins:hubspot:sync_retry_all' organizer=request.event.organizer.slug event=request.event.slug %}" style="display:inline-block;">
+            <form method="post" action="{% url 'plugins:hubspot:sync_retry_all' organizer=request.event.organizer.slug event=request.event.slug %}" class="hubspot-retry-form">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-default">
                     <i class="fa fa-refresh"></i> {% translate "Retry all failed" %}
@@ -101,7 +105,7 @@
                                         </td>
                                         <td>
                                             {% if record.error_readable %}
-                                                <div class="text-danger" style="max-width: 300px; word-wrap: break-word;">
+                                                <div class="text-danger hubspot-sync-error">
                                                     <strong>{{ record.error_readable }}</strong>
                                                     <br>
                                                     <small class="text-muted" title="{{ record.error_message }}">
@@ -133,8 +137,8 @@
                 </form>
                 {% include "pretixcontrol/pagination.html" %}
             {% else %}
-                <div class="text-center" style="padding: 40px 0;">
-                    <i class="fa fa-check-circle text-success" style="font-size: 48px; margin-bottom: 20px;"></i>
+                <div class="text-center hubspot-sync-empty">
+                    <i class="fa fa-check-circle text-success hubspot-sync-empty-icon"></i>
                     <h3>{% translate "Everything is synced" %}</h3>
                     <p class="text-muted">{% translate "There are no pending or failed sync records to display." %}</p>
                 </div>

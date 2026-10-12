@@ -3,16 +3,16 @@
     background-color: #eee;
 }
 
-.highlight-row-temp {
-    background-color: #fcf8e3 !important;
+#field-mapping-table > tbody > tr.highlight-row-temp > td {
+    background-color: #fcf8e3;
 }
 
 .default-badge {
     margin-left: 5px;
 }
 
-.duplicate-hubspot-property select[name$="-hubspot_property"] {
-    border: 2px solid #f0ad4e !important;
+#field-mapping-table .duplicate-hubspot-property select[name$="-hubspot_property"] {
+    border: 2px solid #f0ad4e;
     background-color: #fcf8e3;
 }
 

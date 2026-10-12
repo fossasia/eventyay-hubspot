@@ -151,7 +151,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 var $select = $(select);
                 setTimeout(function() {
                     var $container = $select.next('.select2-container');
-                    var loaderHtml = '<div class="text-muted" style="padding: 6px;"><i class="fa fa-spinner fa-spin fa-fw"></i> Loading properties...</div>';
+                    var loaderHtml = '<div class="text-muted hubspot-property-loader"><i class="fa fa-spinner fa-spin fa-fw"></i> Loading properties...</div>';
                     if ($container.length) {
                         $container.hide();
                         $container.after(loaderHtml);
