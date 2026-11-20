@@ -1,4 +1,5 @@
-{% load i18n %}
+{% load i18n static %}
+<link rel="stylesheet" type="text/css" href="{% static "hubspot/css/common.css" %}">
 <div class="panel panel-default">
     <div class="panel-heading">
         <h3 class="panel-title">
@@ -11,9 +12,9 @@
             {% trans "The HubSpot mapping configuration has been updated since this order was last synced. You may want to sync again." %}
         </div>
         {% endif %}
-        <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="hubspot-order-status">
             <div>
-                <span style="margin-right: 20px;">
+                <span class="hubspot-status-space">
                     <strong>{% trans "Status:" %}</strong> <span class="{{ status_class }}">{{ status_text }}</span>
                 </span>
                 {% if last_synced_at %}
@@ -23,7 +24,7 @@
                 {% endif %}
             </div>
             
-            <form action="{% url "plugins:hubspot:sync_order" organizer=event.organizer.slug event=event.slug order=order.code %}" method="post" style="margin: 0;">
+            <form action="{% url "plugins:hubspot:sync_order" organizer=event.organizer.slug event=event.slug order=order.code %}" method="post" class="hubspot-order-sync-form">
                 {% csrf_token %}
                 {% if not can_sync %}
                     <button type="button" class="btn btn-primary sync-now-btn" disabled data-toggle="tooltip" title="{% trans "You do not have permission to sync orders." %}">

@@ -4,6 +4,7 @@
 {% block title %}{% translate "HubSpot Activity Log" %} :: {% endblock %}
 
 {% block custom_header %}
+    <link rel="stylesheet" type="text/css" href="{% static "hubspot/css/common.css" %}">
     <link rel="stylesheet" type="text/css" href="{% static "hubspot/css/settings_landing.css" %}">
 {% endblock %}
 
@@ -53,7 +54,7 @@
                 <form id="logs-form" method="post" action="">
                     {% csrf_token %}
                     {% if is_paginated and paginator.count > activities|length %}
-                        <div id="select-all-message" class="alert alert-info text-center" style="display: none; margin-bottom: 15px;">
+                        <div id="select-all-message" class="alert alert-info text-center hubspot-log-selection">
                             {% blocktranslate trimmed with count=activities|length total=paginator.count %}
                                 All <strong>{{ count }}</strong> logs on this page are selected.
                             {% endblocktranslate %}
@@ -63,7 +64,7 @@
                                 {% endblocktranslate %}
                             </a>
                         </div>
-                        <div id="all-pages-selected-message" class="alert alert-info text-center" style="display: none; margin-bottom: 15px;">
+                        <div id="all-pages-selected-message" class="alert alert-info text-center hubspot-log-selection">
                             {% blocktranslate trimmed with total=paginator.count %}
                                 All <strong>{{ total }}</strong> logs have been selected.
                             {% endblocktranslate %}
@@ -75,7 +76,7 @@
                         <table class="table table-hover table-striped">
                             <thead>
                                 <tr>
-                                    <th class="text-center" style="width: 40px;">
+                                    <th class="text-center hubspot-log-checkbox-column">
                                         <input type="checkbox" id="select-all" title="{% translate 'Select all' %}" />
                                     </th>
                                     <th>{% translate "Time" %}</th>

@@ -3,6 +3,8 @@
 {% load bootstrap3 %}
 
 {% block custom_header %}
+    <link rel="stylesheet" type="text/css" href="{% static "hubspot/css/field_mapping.css" %}">
+    <link rel="stylesheet" type="text/css" href="{% static "hubspot/css/common.css" %}">
     <script type="text/javascript" src="{% static "hubspot/js/field_mapping.js" %}" defer></script>
 {% endblock %}
 
@@ -38,7 +40,7 @@
         {% if sync_error %}
             <div class="alert alert-danger">
                 <p><strong>{% translate "Error syncing HubSpot properties:" %}</strong> {{ sync_error }}</p>
-                <a href="?force_sync=1" class="btn btn-danger" style="margin-top: 10px;">
+                <a href="?force_sync=1" class="btn btn-danger hubspot-space-top">
                     <i class="fa fa-refresh"></i> {% translate "Manual Sync Fetch" %}
                 </a>
             </div>
@@ -47,11 +49,11 @@
         <table class="table table-striped table-condensed formset-table" id="field-mapping-table">
             <thead>
                 <tr>
-                    <th style="width: 35%;">{% translate "Eventyay Field" %}</th>
-                    <th style="width: 35%;">{% translate "HubSpot Property" %}</th>
-                    <th style="width: 15%;">{% translate "Sync Mode" %}</th>
-                    <th class="text-center" style="width: 8%;">{% translate "Active" %}</th>
-                    <th class="text-center" style="width: 7%;">{% translate "Delete" %}</th>
+                    <th class="hubspot-mapping-col-field">{% translate "Eventyay Field" %}</th>
+                    <th class="hubspot-mapping-col-field">{% translate "HubSpot Property" %}</th>
+                    <th class="hubspot-mapping-col-mode">{% translate "Sync Mode" %}</th>
+                    <th class="text-center hubspot-mapping-col-active">{% translate "Active" %}</th>
+                    <th class="text-center hubspot-mapping-col-delete">{% translate "Delete" %}</th>
                 </tr>
             </thead>
             <tbody id="field-mapping-formset" data-formset-prefix="{{ formset.prefix }}">
@@ -85,16 +87,16 @@
                                 <div class="text-danger small">{{ error }}</div>
                             {% endfor %}
                         </td>
-                        <td class="text-center" style="vertical-align: middle;">
+                        <td class="text-center hubspot-align-middle">
                             {{ form.is_active }}
                         </td>
-                        <td class="text-center" style="vertical-align: middle;">
+                        <td class="text-center hubspot-align-middle">
                             {% if not form.instance.pk or form.instance.sync_mode != 'identifier' %}
                                 <button type="button" class="btn btn-danger btn-sm remove-form-row">
                                     <i class="fa fa-trash"></i>
                                 </button>
                             {% endif %}
-                            <span style="display:none;">{{ form.DELETE }}</span>
+                            <span class="hubspot-hidden">{{ form.DELETE }}</span>
                         </td>
                     </tr>
                 {% endfor %}
@@ -110,14 +112,14 @@
                 <td>{{ formset.empty_form.eventyay_field }}</td>
                 <td>{{ formset.empty_form.hubspot_property }}</td>
                 <td>{{ formset.empty_form.sync_mode }}</td>
-                <td class="text-center" style="vertical-align: middle;">
+                <td class="text-center hubspot-align-middle">
                     {{ formset.empty_form.is_active }}
                 </td>
-                <td class="text-center" style="vertical-align: middle;">
+                <td class="text-center hubspot-align-middle">
                     <button type="button" class="btn btn-danger btn-sm remove-form-row">
                         <i class="fa fa-trash"></i>
                     </button>
-                    <span style="display:none;">{{ formset.empty_form.DELETE }}</span>
+                    <span class="hubspot-hidden">{{ formset.empty_form.DELETE }}</span>
                 </td>
             </tr>
         </script>
@@ -126,7 +128,7 @@
             <i class="fa fa-plus"></i> {% translate "Add row" %}
         </button>
 
-        <div class="text-right" style="margin-top: 20px;">
+        <div class="text-right hubspot-actions-space">
             <a href="{% url 'plugins:hubspot:org_hubspot' organizer=request.organizer.slug %}" class="btn btn-default btn-lg">
                 {% translate "Cancel" %}
             </a>

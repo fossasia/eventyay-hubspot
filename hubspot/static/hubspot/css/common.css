@@ -1,0 +1,86 @@
+.hubspot-space-top {
+    margin-top: 10px;
+}
+
+.hubspot-mapping-col-field {
+    width: 35%;
+}
+
+.hubspot-mapping-col-mode {
+    width: 15%;
+}
+
+.hubspot-mapping-col-active {
+    width: 8%;
+}
+
+.hubspot-mapping-col-delete {
+    width: 7%;
+}
+
+.hubspot-align-middle,
+.table td.hubspot-align-middle {
+    vertical-align: middle;
+}
+
+.hubspot-hidden {
+    display: none;
+}
+
+.hubspot-actions-space {
+    margin-top: 20px;
+}
+
+.hubspot-small-space-top {
+    margin-top: 5px;
+}
+
+.hubspot-order-status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.hubspot-status-space {
+    margin-right: 20px;
+}
+
+.hubspot-order-sync-form {
+    margin: 0;
+}
+
+.hubspot-log-selection {
+    display: none;
+    margin-bottom: 15px;
+}
+
+.hubspot-log-checkbox-column {
+    width: 40px;
+}
+
+.hubspot-sync-actions {
+    margin-bottom: 20px;
+}
+
+.hubspot-retry-form {
+    display: inline-block;
+}
+
+.hubspot-sync-error {
+    max-width: 300px;
+    word-wrap: break-word;
+}
+
+.hubspot-sync-empty {
+    padding: 40px 0;
+}
+
+.hubspot-sync-empty-icon {
+    font-size: 48px;
+    margin-bottom: 20px;
+}
+
+.hubspot-property-loader {
+    padding: 6px;
+}
+

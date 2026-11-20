@@ -2,6 +2,7 @@
 {% load i18n static %}
 
 {% block custom_header %}
+    <link rel="stylesheet" type="text/css" href="{% static "hubspot/css/common.css" %}">
     <link rel="stylesheet" type="text/css" href="{% static "hubspot/css/settings_landing.css" %}">
     <link rel="stylesheet" type="text/css" href="{% static "hubspot/css/organizer_settings.css" %}">
     <script type="text/javascript" src="{% static "hubspot/js/organizer_settings.js" %}"></script>
@@ -100,13 +101,13 @@
                                             <i class="fa fa-exclamation-triangle"></i> {% translate "Conflict with defaults" %}
                                         </span>
                                         <br>
-                                        <a href="{% url 'plugins:hubspot:resolve_conflict' organizer=request.organizer.slug event=event.slug %}" class="btn btn-warning btn-xs" style="margin-top: 5px;">
+                                        <a href="{% url 'plugins:hubspot:resolve_conflict' organizer=request.organizer.slug event=event.slug %}" class="btn btn-warning btn-xs hubspot-small-space-top">
                                             {% translate "Resolve" %}
                                         </a>
                                     {% endif %}
                                 </td>
                                 <td class="text-center">
-                                    <label class="hubspot-toggle" style="vertical-align: middle;">
+                                    <label class="hubspot-toggle hubspot-align-middle">
                                         <input type="checkbox" name="event_sync_enabled_{{ event.id }}" value="1" {% if event.event_sync_enabled %}checked{% endif %}>
                                         <span class="slider"></span>
                                     </label>
