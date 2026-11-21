@@ -11,7 +11,7 @@ from django.template.loader import get_template
 from django.urls import resolve, reverse
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
-from django_scopes import scope
+from django_scopes import scope, scopes_disabled
 from eventyay.base.models import Event, Order, OrderPosition
 from eventyay.base.signals import (
     order_canceled,
@@ -206,8 +206,9 @@ def clear_audit_logs(sender, **kwargs):
     days = 180
 
     threshold = now() - timedelta(days=days)
-    AuditLog.objects.filter(created_at__lt=threshold).delete()
-    SyncLog.objects.filter(created_at__lt=threshold).delete()
+    with scopes_disabled():
+        AuditLog.objects.filter(created_at__lt=threshold).delete()
+        SyncLog.objects.filter(created_at__lt=threshold).delete()
 
 
 @receiver(order_info, dispatch_uid="hubspot_control_order_info")
