@@ -30,7 +30,7 @@ from .models import (
     SyncMode,
     SyncStatus,
 )
-from .operational_log import OUTCOME_SUCCESS, log_operation, traced_job
+from .operational_log import OUTCOME_FAILURE, OUTCOME_SUCCESS, log_operation, traced_job
 from .services import (
     HubSpotFetchError,
     get_hubspot_properties,
@@ -357,6 +357,16 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
                 detail__order_code=order.code,
             ).delete()
         except HubSpotTransientError as e:
+            log_operation(
+                "sync.order",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                retry_count=self.request.retries,
+                status=getattr(e, "status_code", None),
+                error_code="transient_error",
+            )
             delay = 2**self.request.retries
             retry_after = getattr(e, "retry_after_seconds", None)
             if retry_after:
@@ -408,7 +418,11 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
                 raise e
             except HubSpotPermanentError as e:
                 # If we fail to fetch, it's safer to not overwrite anything
-                logger.warning(f"Could not fetch record {existing_id} from HubSpot: {e}")
+                logger.warning(
+                    "Could not fetch record %s from HubSpot (status=%s)",
+                    existing_id,
+                    getattr(e, "status_code", None),
+                )
 
     properties_to_send = {}
     for prop, val in raw_properties.items():
@@ -494,7 +508,11 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
                 except HubSpotTransientError as e:
                     raise e
                 except HubSpotPermanentError as e:
-                    logger.warning(f"Could not fetch record {existing_id} from HubSpot on conflict: {e}")
+                    logger.warning(
+                        "Could not fetch record %s from HubSpot on conflict (status=%s)",
+                        existing_id,
+                        getattr(e, "status_code", None),
+                    )
 
             properties_to_send = {}
             for prop, val in raw_properties.items():
@@ -535,6 +553,14 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
                 direction=SyncDirection.PUSH,
                 status=SyncStatus.SUCCESS,
             )
+        log_operation(
+            "sync.object",
+            OUTCOME_SUCCESS,
+            backend="hubspot",
+            event_id=event.id,
+            model=content_type.model,
+            object_id=obj.id,
+        )
     except HubSpotTransientError as e:
         raise e
     except HubSpotPermanentError as e:
@@ -556,6 +582,16 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
             status=SyncStatus.FAILED,
             detail={"error": str(e), "status_code": getattr(e, "status_code", None)},
         )
+        log_operation(
+            "sync.object",
+            OUTCOME_FAILURE,
+            backend="hubspot",
+            event_id=event.id,
+            model=content_type.model,
+            object_id=obj.id,
+            status=getattr(e, "status_code", None),
+            error_code="permanent_error",
+        )
 
 
 @shared_task(bind=True, max_retries=3)
@@ -575,6 +611,7 @@ def sync_all_mappings_task(self, event_id: int):
     logger.info(f"Found {len(order_ids)} orders for event {event_id}. Queuing sync tasks.")
     for order_id in order_ids:
         sync_order_to_hubspot.apply_async(args=[order_id, event_id], countdown=0)
+    log_operation("sync.batch_enqueue", OUTCOME_SUCCESS, backend="hubspot", event_id=event_id)
 
 
 @shared_task(bind=True, max_retries=3)
@@ -611,7 +648,25 @@ def refresh_hubspot_properties_task(self, event_id: int | None, object_type: str
         cache.delete(error_key)
         cache.delete(lock_key)
         cache.delete(manual_sync_lock_key)
+        log_operation(
+            "properties.refresh",
+            OUTCOME_SUCCESS,
+            backend="hubspot",
+            event_id=event_id,
+            model="organizer" if organizer_id else "event",
+            object_id=organizer_id or event_id,
+        )
     except HubSpotFetchError as e:
+        log_operation(
+            "properties.refresh",
+            OUTCOME_FAILURE,
+            backend="hubspot",
+            event_id=event_id,
+            model="organizer" if organizer_id else "event",
+            object_id=organizer_id or event_id,
+            retry_count=self.request.retries,
+            error_code="fetch_error",
+        )
         delay = 2**self.request.retries
         retry_after = getattr(e, "retry_after", None)
         if retry_after:

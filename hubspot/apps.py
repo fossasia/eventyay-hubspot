@@ -1,9 +1,11 @@
+import logging
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.translation import gettext_lazy as _
 
 from . import __version__
+from .operational_log import log_plugin_loaded
 
 
 try:
@@ -26,11 +28,8 @@ class EventyayHubspotPluginApp(PluginConfig):
         category = "INTEGRATION"
 
     def ready(self):
-        from .operational_log import log_plugin_loaded
-
         log_plugin_loaded("hubspot")
         from . import signals  # NOQA
-        import logging
 
         logger = logging.getLogger(__name__)
 

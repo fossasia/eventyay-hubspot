@@ -11,7 +11,7 @@ from django_scopes import scope
 from eventyay.base.models import Order, OrderPosition
 from eventyay.base.settings import GlobalSettingsObject
 
-from hubspot.operational_log import logged_request
+from hubspot.operational_log import OUTCOME_FAILURE, OUTCOME_SUCCESS, log_operation, logged_request
 
 from .models import (
     AuditAction,
@@ -222,7 +222,16 @@ def _refresh_token_record(token_obj, event_or_organizer, is_organizer=False):
             "Network error refreshing HubSpot token for %s %s: %s",
             "organizer" if is_organizer else "event",
             event_or_organizer.slug,
-            e,
+            type(e).__name__,
+        )
+        log_operation(
+            "oauth.refresh",
+            OUTCOME_FAILURE,
+            backend="hubspot",
+            event_id=None if is_organizer else event_or_organizer.id,
+            model="organizer" if is_organizer else "event",
+            object_id=event_or_organizer.id,
+            error_code="request_error",
         )
         AuditLog.objects.create(
             organizer=organizer,
@@ -240,6 +249,16 @@ def _refresh_token_record(token_obj, event_or_organizer, is_organizer=False):
         return None
 
     if not response.ok:
+        log_operation(
+            "oauth.refresh",
+            OUTCOME_FAILURE,
+            backend="hubspot",
+            event_id=None if is_organizer else event_or_organizer.id,
+            model="organizer" if is_organizer else "event",
+            object_id=event_or_organizer.id,
+            status=response.status_code,
+            error_code="http_error",
+        )
         AuditLog.objects.create(
             organizer=organizer,
             event=None if is_organizer else event_or_organizer,
@@ -279,6 +298,14 @@ def _refresh_token_record(token_obj, event_or_organizer, is_organizer=False):
             detail={"message": "Token refreshed successfully"},
         )
 
+    log_operation(
+        "oauth.refresh",
+        OUTCOME_SUCCESS,
+        backend="hubspot",
+        event_id=None if is_organizer else event_or_organizer.id,
+        model="organizer" if is_organizer else "event",
+        object_id=event_or_organizer.id,
+    )
     return token_obj.access_token
 
 

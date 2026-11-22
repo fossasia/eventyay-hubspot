@@ -13,6 +13,25 @@ import functools
 import logging
 import re
 import time
+import uuid
+from contextvars import ContextVar
+
+import requests
+import requests.api as requests_api
+
+
+try:
+    from eventyay.base import operational_logging as _host_logging
+except Exception:
+    _HOST_LOG_EVENT = None
+    _HOST_BIND_JOB_ID = None
+    _HOST_RESET_JOB_ID = None
+    _HOST_GET_JOB_ID = None
+else:
+    _HOST_LOG_EVENT = getattr(_host_logging, "log_event", None)
+    _HOST_BIND_JOB_ID = getattr(_host_logging, "bind_job_id", None)
+    _HOST_RESET_JOB_ID = getattr(_host_logging, "reset_job_id", None)
+    _HOST_GET_JOB_ID = getattr(_host_logging, "get_job_id", None)
 
 
 OUTCOME_SUCCESS = "success"
@@ -20,6 +39,7 @@ OUTCOME_FAILURE = "failure"
 
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _LOGGER = logging.getLogger("eventyay.plugins")
+_JOB_ID: ContextVar[str | None] = ContextVar("hubspot_job_id", default=None)
 _INT_FIELDS = frozenset(
     {
         "event_id",
@@ -28,8 +48,6 @@ _INT_FIELDS = frozenset(
         "status",
         "duration_ms",
         "retry_count",
-        "webhook_id",
-        "recipient_count",
     }
 )
 _IDENTIFIER_FIELDS = frozenset(
@@ -37,9 +55,8 @@ _IDENTIFIER_FIELDS = frozenset(
         "error_code",
         "backend",
         "job_name",
-        "payment_provider",
+        "job_id",
         "model",
-        "order_code",
     }
 )
 _REQUEST_VERBS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
@@ -48,6 +65,18 @@ _REQUEST_VERBS = frozenset({"get", "post", "put", "patch", "delete", "head", "op
 def _safe_identifier(value):
     if isinstance(value, str) and _SAFE_IDENTIFIER.fullmatch(value):
         return value
+    return None
+
+
+def _current_job_id() -> str | None:
+    local_id = _JOB_ID.get()
+    if local_id is not None:
+        return local_id
+    if _HOST_GET_JOB_ID is not None:
+        try:
+            return _HOST_GET_JOB_ID()
+        except Exception:
+            return None
     return None
 
 
@@ -87,14 +116,16 @@ def log_operation(action, outcome, **fields):
             outcome = OUTCOME_FAILURE
         level = logging.WARNING if outcome == OUTCOME_FAILURE else logging.INFO
         payload = _clean(fields)
-        emitter = None
-        try:
-            from eventyay.base.operational_logging import log_event as emitter
-        except Exception:
-            emitter = None
-        if emitter is not None:
-            emitter("plugins", action, outcome, level=level, **payload)
-            return
+        if "job_id" not in payload:
+            current_job_id = _safe_identifier(_current_job_id())
+            if current_job_id is not None:
+                payload["job_id"] = current_job_id
+        if _HOST_LOG_EVENT is not None:
+            try:
+                _HOST_LOG_EVENT("plugins", action, outcome, level=level, **payload)
+                return
+            except Exception:
+                pass
         extra = {
             "component": "plugins",
             "outcome": outcome,
@@ -120,9 +151,6 @@ def _send_request(method, url, **kwargs):
     A patched ``requests.get`` or ``requests.post`` wins. Otherwise a patched
     ``requests.request`` wins. Unpatched calls use the verb helper.
     """
-    import requests
-    import requests.api as requests_api
-
     verb_name = str(method).lower()
     if verb_name in _REQUEST_VERBS:
         patched = getattr(requests, verb_name, None)
@@ -144,8 +172,6 @@ def logged_request(backend, method, url, **kwargs):
     treats a 4xx response as success. The same exception is re-raised.
     The URL and body are not logged.
     """
-    import requests
-
     ok_statuses = kwargs.pop("ok_statuses", ())
     started = time.monotonic()
     try:
@@ -184,12 +210,23 @@ def logged_request(backend, method, url, **kwargs):
 
 
 def traced_job(job_name):
-    """Log job boundaries without changing the return value or exception."""
+    """Log job boundaries with job_id correlation without changing behavior."""
 
     def decorator(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            log_operation("job.start", OUTCOME_SUCCESS, job_name=job_name)
+            existing_job_id = _current_job_id()
+            job_id = _safe_identifier(existing_job_id) or uuid.uuid4().hex
+            token = _JOB_ID.set(job_id)
+            bound_host = False
+            if not existing_job_id and _HOST_BIND_JOB_ID is not None:
+                try:
+                    _HOST_BIND_JOB_ID(job_id)
+                    bound_host = True
+                except Exception:
+                    bound_host = False
+            started = time.monotonic()
+            log_operation("job.start", OUTCOME_SUCCESS, job_name=job_name, job_id=job_id)
             try:
                 result = fn(*args, **kwargs)
             except Exception as exc:
@@ -198,11 +235,27 @@ def traced_job(job_name):
                     "job.retry" if retried else "job.fail",
                     OUTCOME_FAILURE,
                     job_name=job_name,
+                    job_id=job_id,
+                    duration_ms=_elapsed_ms(started),
                     error_code="retry" if retried else type(exc).__name__,
                 )
                 raise
-            log_operation("job.finish", OUTCOME_SUCCESS, job_name=job_name)
-            return result
+            else:
+                log_operation(
+                    "job.finish",
+                    OUTCOME_SUCCESS,
+                    job_name=job_name,
+                    job_id=job_id,
+                    duration_ms=_elapsed_ms(started),
+                )
+                return result
+            finally:
+                if bound_host and _HOST_RESET_JOB_ID is not None:
+                    try:
+                        _HOST_RESET_JOB_ID()
+                    except Exception:
+                        pass
+                _JOB_ID.reset(token)
 
         return wrapper
 
