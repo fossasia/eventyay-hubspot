@@ -27,7 +27,7 @@ from eventyay.control.views.organizer_views.organizer_detail_view_mixin import (
     OrganizerDetailViewMixin,
 )
 
-from hubspot.operational_log import OUTCOME_FAILURE, OUTCOME_SUCCESS, log_operation, logged_request
+from hubspot.operational_log import OUTCOME_FAILURE, OUTCOME_SUCCESS, log_operation, logged_request, task_job_id
 
 from .field_discovery import get_available_fields
 from .forms import (
@@ -248,6 +248,13 @@ class EventHubSpotCallbackView(View):
         is_organizer_flow = len(parts) == 2
 
         if not state_token or not organizer_slug or (not is_organizer_flow and not event_slug):
+            log_operation(
+                "oauth.callback",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                user_id=request.user.pk if request.user.is_authenticated else None,
+                error_code="malformed_state",
+            )
             raise PermissionDenied(_("Invalid state parameter."))
 
         saved_state = request.session.pop("hubspot_oauth_state", None)
@@ -267,7 +274,13 @@ class EventHubSpotCallbackView(View):
             )
 
         if error:
-            log_operation("oauth.callback", OUTCOME_FAILURE, backend="hubspot", error_code="oauth_error")
+            log_operation(
+                "oauth.callback",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                user_id=request.user.pk if request.user.is_authenticated else None,
+                error_code="oauth_error",
+            )
             messages.error(
                 request,
                 _("HubSpot authorization failed: {}").format(error_description or error),
@@ -275,21 +288,51 @@ class EventHubSpotCallbackView(View):
             return redirect(settings_url)
 
         if not state_token or state_token != saved_state:
-            log_operation("oauth.callback", OUTCOME_FAILURE, backend="hubspot", error_code="invalid_state")
+            log_operation(
+                "oauth.callback",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                user_id=request.user.pk if request.user.is_authenticated else None,
+                error_code="invalid_state",
+            )
             messages.error(request, _("Invalid state parameter. Please try again."))
             return redirect(settings_url)
 
         # Verify permissions manually
         if not request.user.is_authenticated:
+            log_operation(
+                "permission.denied",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                route="oauth.callback",
+                error_code="unauthenticated",
+            )
             raise PermissionDenied()
 
         if is_organizer_flow:
             try:
                 organizer = Organizer.objects.get(slug=organizer_slug)
             except Organizer.DoesNotExist:
+                log_operation(
+                    "oauth.callback",
+                    OUTCOME_FAILURE,
+                    backend="hubspot",
+                    user_id=request.user.pk,
+                    error_code="organizer_not_found",
+                )
                 raise PermissionDenied(_("Organizer not found."))
 
             if not request.user.has_organizer_permission(organizer, "can_change_organizer_settings", request=request):
+                log_operation(
+                    "permission.denied",
+                    OUTCOME_FAILURE,
+                    backend="hubspot",
+                    model="organizer",
+                    object_id=organizer.id,
+                    user_id=request.user.pk,
+                    route="oauth.callback",
+                    error_code="forbidden",
+                )
                 raise PermissionDenied(_("You do not have permission to view this content."))
         else:
             try:
@@ -298,11 +341,27 @@ class EventHubSpotCallbackView(View):
                     organizer__slug=organizer_slug,
                 )
             except Event.DoesNotExist:
+                log_operation(
+                    "oauth.callback",
+                    OUTCOME_FAILURE,
+                    backend="hubspot",
+                    user_id=request.user.pk,
+                    error_code="event_not_found",
+                )
                 raise PermissionDenied(_("Event not found."))
 
             if not request.user.has_event_permission(
                 event.organizer, event, "can_change_event_settings", request=request
             ):
+                log_operation(
+                    "permission.denied",
+                    OUTCOME_FAILURE,
+                    backend="hubspot",
+                    event_id=event.id,
+                    user_id=request.user.pk,
+                    route="oauth.callback",
+                    error_code="forbidden",
+                )
                 raise PermissionDenied(_("You do not have permission to view this content."))
 
         gs = GlobalSettingsObject()
@@ -312,6 +371,7 @@ class EventHubSpotCallbackView(View):
             "hubspot",
             "POST",
             "https://api.hubapi.com/oauth/v1/token",
+            operation="POST:oauth.token_exchange",
             data={
                 "grant_type": "authorization_code",
                 "client_id": gs.settings.hubspot_client_id or os.environ.get("HUBSPOT_CLIENT_ID", ""),
@@ -347,6 +407,7 @@ class EventHubSpotCallbackView(View):
                     "hubspot",
                     "GET",
                     f"https://api.hubapi.com/oauth/v1/access-tokens/{access_token}",
+                    operation="GET:oauth.token_info",
                     timeout=10,
                 )
                 if info_resp.ok:
@@ -452,7 +513,13 @@ class EventHubSpotDisconnectView(EventPermissionRequiredMixin, View):
             try:
                 # We use the refresh token to revoke, as per HubSpot docs.
                 revoke_url = f"https://api.hubapi.com/oauth/v1/refresh-tokens/{token.refresh_token}"
-                response = logged_request("hubspot", "DELETE", revoke_url, timeout=10)
+                response = logged_request(
+                    "hubspot",
+                    "DELETE",
+                    revoke_url,
+                    operation="DELETE:oauth.token_revoke",
+                    timeout=10,
+                )
                 if not response.ok:
                     logger.warning("Failed to revoke HubSpot token (status=%s)", response.status_code)
             except requests.RequestException as e:
@@ -703,13 +770,16 @@ class EventHubSpotFieldMappingView(EventPermissionRequiredMixin, TemplateView):
 
                 from .tasks import refresh_hubspot_properties_task
 
-                refresh_hubspot_properties_task.apply_async(args=[request.event.id, mapping.hubspot_object_type])
+                result = refresh_hubspot_properties_task.apply_async(
+                    args=[request.event.id, mapping.hubspot_object_type]
+                )
                 log_operation(
                     "properties.refresh_enqueue",
                     OUTCOME_SUCCESS,
                     backend="hubspot",
                     event_id=request.event.id,
                     user_id=request.user.pk,
+                    job_id=task_job_id(result),
                 )
                 messages.success(request, _("Sync task started in the background."))
             else:
@@ -893,13 +963,14 @@ class EventHubSpotSyncMappingView(EventPermissionRequiredMixin, View):
             )
             return redirect(settings_url)
 
-        sync_all_mappings_task.apply_async(args=[request.event.id])
+        result = sync_all_mappings_task.apply_async(args=[request.event.id])
         log_operation(
             "sync.all_enqueue",
             OUTCOME_SUCCESS,
             backend="hubspot",
             event_id=request.event.id,
             user_id=request.user.pk,
+            job_id=task_job_id(result),
         )
 
         messages.success(
@@ -994,7 +1065,7 @@ class RetrySyncView(EventPermissionRequiredMixin, View):
 
     def post(self, request, *args, **kwargs):
         order_id = kwargs["order_id"]
-        sync_order_to_hubspot.apply_async(args=[order_id, request.event.id])
+        result = sync_order_to_hubspot.apply_async(args=[order_id, request.event.id])
         log_operation(
             "sync.retry_enqueue",
             OUTCOME_SUCCESS,
@@ -1002,6 +1073,7 @@ class RetrySyncView(EventPermissionRequiredMixin, View):
             event_id=request.event.id,
             order_id=order_id,
             user_id=request.user.pk,
+            job_id=task_job_id(result),
         )
         messages.success(request, _("Sync retry queued."))
         return redirect(
@@ -1024,7 +1096,16 @@ class RetryAllFailedView(EventPermissionRequiredMixin, View):
         failed_records = get_failed_sync_records(request.event)
         order_ids = {r["order_id"] for r in failed_records}
         for order_id in order_ids:
-            sync_order_to_hubspot.apply_async(args=[order_id, request.event.id])
+            result = sync_order_to_hubspot.apply_async(args=[order_id, request.event.id])
+            log_operation(
+                "sync.retry_enqueue",
+                OUTCOME_SUCCESS,
+                backend="hubspot",
+                event_id=request.event.id,
+                order_id=order_id,
+                user_id=request.user.pk,
+                job_id=task_job_id(result),
+            )
         log_operation(
             "sync.retry_all_enqueue",
             OUTCOME_SUCCESS,
@@ -1064,7 +1145,17 @@ class SyncRetryBulkView(EventPermissionRequiredMixin, View):
 
             if validated_order_ids:
                 for order_id in validated_order_ids:
-                    sync_order_to_hubspot.apply_async(args=[int(order_id), request.event.id])
+                    oid = int(order_id)
+                    result = sync_order_to_hubspot.apply_async(args=[oid, request.event.id])
+                    log_operation(
+                        "sync.retry_enqueue",
+                        OUTCOME_SUCCESS,
+                        backend="hubspot",
+                        event_id=request.event.id,
+                        order_id=oid,
+                        user_id=request.user.pk,
+                        job_id=task_job_id(result),
+                    )
                 log_operation(
                     "sync.retry_bulk_enqueue",
                     OUTCOME_SUCCESS,
@@ -1197,7 +1288,7 @@ class SyncOrderNowView(EventPermissionRequiredMixin, View):
                 },
             )
 
-            sync_order_to_hubspot.apply_async(args=[order.id, request.event.id])
+            result = sync_order_to_hubspot.apply_async(args=[order.id, request.event.id])
             log_operation(
                 "sync.order_enqueue",
                 OUTCOME_SUCCESS,
@@ -1205,6 +1296,7 @@ class SyncOrderNowView(EventPermissionRequiredMixin, View):
                 event_id=request.event.id,
                 order_id=order.id,
                 user_id=request.user.pk,
+                job_id=task_job_id(result),
             )
             messages.success(request, _("Sync task queued."))
         except Order.DoesNotExist:
@@ -1547,7 +1639,13 @@ class OrganizerHubSpotDisconnectView(OrganizerPermissionRequiredMixin, View):
         # Attempt to revoke at HubSpot
         try:
             revoke_url = f"https://api.hubapi.com/oauth/v1/refresh-tokens/{token.refresh_token}"
-            response = logged_request("hubspot", "DELETE", revoke_url, timeout=10)
+            response = logged_request(
+                "hubspot",
+                "DELETE",
+                revoke_url,
+                operation="DELETE:oauth.token_revoke",
+                timeout=10,
+            )
             if not response.ok:
                 logger.warning("Failed to revoke HubSpot organizer token (status=%s)", response.status_code)
         except requests.RequestException as e:
@@ -1690,7 +1788,7 @@ class OrganizerHubSpotDefaultMappingView(OrganizerPermissionRequiredMixin, Templ
 
                 from .tasks import refresh_hubspot_properties_task
 
-                refresh_hubspot_properties_task.apply_async(
+                result = refresh_hubspot_properties_task.apply_async(
                     args=[None, mapping.hubspot_object_type, request.organizer.id]
                 )
                 log_operation(
@@ -1700,6 +1798,7 @@ class OrganizerHubSpotDefaultMappingView(OrganizerPermissionRequiredMixin, Templ
                     model="organizer",
                     object_id=request.organizer.id,
                     user_id=request.user.pk,
+                    job_id=task_job_id(result),
                 )
                 messages.success(request, _("Sync task started in the background."))
             else:

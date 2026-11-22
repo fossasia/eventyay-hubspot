@@ -11,7 +11,7 @@ from django_scopes import scope
 from eventyay.base.models import Order, OrderPosition
 from eventyay.base.settings import GlobalSettingsObject
 
-from hubspot.operational_log import OUTCOME_FAILURE, OUTCOME_SUCCESS, log_operation, logged_request
+from hubspot.operational_log import OUTCOME_FAILURE, OUTCOME_SUCCESS, log_operation, logged_request, task_job_id
 
 from .models import (
     AuditAction,
@@ -80,12 +80,21 @@ def get_hubspot_properties(event, object_type: str, force_sync: bool = False, or
 
             from .tasks import refresh_hubspot_properties_task
 
-            refresh_hubspot_properties_task.apply_async(
+            result = refresh_hubspot_properties_task.apply_async(
                 args=[
                     event.id if event else None,
                     object_type,
                     organizer.id if organizer else None,
                 ]
+            )
+            log_operation(
+                "properties.refresh_enqueue",
+                OUTCOME_SUCCESS,
+                backend="hubspot",
+                event_id=event.id if event else None,
+                model="organizer" if organizer else "event",
+                object_id=organizer.id if organizer else (event.id if event else None),
+                job_id=task_job_id(result),
             )
         else:
             cached_data = cache.get(data_key)
@@ -98,12 +107,21 @@ def get_hubspot_properties(event, object_type: str, force_sync: bool = False, or
             if force_sync or cache.add(rate_limit_key, "1", timeout=30):
                 from .tasks import refresh_hubspot_properties_task
 
-                refresh_hubspot_properties_task.apply_async(
+                result = refresh_hubspot_properties_task.apply_async(
                     args=[
                         event.id if event else None,
                         object_type,
                         organizer.id if organizer else None,
                     ]
+                )
+                log_operation(
+                    "properties.refresh_enqueue",
+                    OUTCOME_SUCCESS,
+                    backend="hubspot",
+                    event_id=event.id if event else None,
+                    model="organizer" if organizer else "event",
+                    object_id=organizer.id if organizer else (event.id if event else None),
+                    job_id=task_job_id(result),
                 )
             else:
                 cache.delete(lock_key)
@@ -138,7 +156,15 @@ def sync_hubspot_properties(event, object_type: str, organizer=None) -> list[dic
             params["after"] = cursor
 
         try:
-            response = logged_request("hubspot", "GET", base_url, headers=headers, params=params, timeout=15)
+            response = logged_request(
+                "hubspot",
+                "GET",
+                base_url,
+                operation="GET:crm.properties.list",
+                headers=headers,
+                params=params,
+                timeout=15,
+            )
             if response.status_code == 429:
                 retry_after = response.headers.get("Retry-After")
                 e = HubSpotFetchError("Rate limited by HubSpot")
@@ -209,6 +235,7 @@ def _refresh_token_record(token_obj, event_or_organizer, is_organizer=False):
             "hubspot",
             "POST",
             "https://api.hubapi.com/oauth/v1/token",
+            operation="POST:oauth.token_refresh",
             data={
                 "grant_type": "refresh_token",
                 "client_id": gs.settings.hubspot_client_id or os.environ.get("HUBSPOT_CLIENT_ID", ""),

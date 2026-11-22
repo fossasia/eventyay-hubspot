@@ -30,7 +30,7 @@ from .models import (
     SyncMode,
     SyncStatus,
 )
-from .operational_log import OUTCOME_FAILURE, OUTCOME_SUCCESS, log_operation, traced_job
+from .operational_log import OUTCOME_FAILURE, OUTCOME_SUCCESS, log_operation, task_job_id, traced_job
 from .services import (
     HubSpotFetchError,
     get_hubspot_properties,
@@ -225,7 +225,7 @@ def resolve_hubspot_properties(obj: Any, object_mapping: ObjectTypeMapping) -> d
         hubspot_props = get_hubspot_properties(object_mapping.event, object_mapping.hubspot_object_type)
         hubspot_props_dict = {p["key"]: p for p in hubspot_props}
     except HubSpotFetchError as e:
-        logger.error(f"Could not load HubSpot properties: {e}")
+        logger.error("Could not load HubSpot properties (%s)", type(e).__name__)
         raise HubSpotTransientError(f"Could not load HubSpot properties: {e}") from e
 
     if not hubspot_props_dict and field_mappings.exists():
@@ -340,6 +340,7 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
             return
 
         try:
+            all_succeeded = True
             for object_mapping_config in active_mappings:
                 objects_to_sync = []
                 if object_mapping_config.eventyay_object_type == "order":
@@ -348,7 +349,8 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
                     objects_to_sync = list(order.positions.all())
 
                 for obj in objects_to_sync:
-                    _sync_single_object(event, object_mapping_config, obj)
+                    if not _sync_single_object(event, object_mapping_config, obj):
+                        all_succeeded = False
 
             # Clean up pending logs for this order
             SyncLog.objects.filter(
@@ -373,10 +375,20 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
                 delay = max(delay, retry_after)
             raise self.retry(exc=e, countdown=delay)
 
-        log_operation("sync.order", OUTCOME_SUCCESS, backend="hubspot", event_id=event_id, order_id=order_id)
+        if all_succeeded:
+            log_operation("sync.order", OUTCOME_SUCCESS, backend="hubspot", event_id=event_id, order_id=order_id)
+        else:
+            log_operation(
+                "sync.order",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                error_code="object_sync_failed",
+            )
 
 
-def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
+def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any) -> bool:
     content_type = ContentType.objects.get_for_model(obj)
 
     # 1. Resolve raw fields using mapping
@@ -465,7 +477,7 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
                 status=SyncStatus.SUCCESS,
                 detail={"message": "No properties to sync based on mappings and current values"},
             )
-        return
+        return True
 
     try:
         conflict_detected = False
@@ -561,6 +573,7 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
             model=content_type.model,
             object_id=obj.id,
         )
+        return True
     except HubSpotTransientError as e:
         raise e
     except HubSpotPermanentError as e:
@@ -592,6 +605,7 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
             status=getattr(e, "status_code", None),
             error_code="permanent_error",
         )
+        return False
 
 
 @shared_task(bind=True, max_retries=3)
@@ -610,7 +624,15 @@ def sync_all_mappings_task(self, event_id: int):
 
     logger.info(f"Found {len(order_ids)} orders for event {event_id}. Queuing sync tasks.")
     for order_id in order_ids:
-        sync_order_to_hubspot.apply_async(args=[order_id, event_id], countdown=0)
+        result = sync_order_to_hubspot.apply_async(args=[order_id, event_id], countdown=0)
+        log_operation(
+            "sync.order_enqueue",
+            OUTCOME_SUCCESS,
+            backend="hubspot",
+            event_id=event_id,
+            order_id=order_id,
+            job_id=task_job_id(result),
+        )
     log_operation("sync.batch_enqueue", OUTCOME_SUCCESS, backend="hubspot", event_id=event_id)
 
 

@@ -32,6 +32,10 @@ else:
     _HOST_BIND_JOB_ID = getattr(_host_logging, "bind_job_id", None)
     _HOST_RESET_JOB_ID = getattr(_host_logging, "reset_job_id", None)
     _HOST_GET_JOB_ID = getattr(_host_logging, "get_job_id", None)
+    _HOST_GET_REQUEST_ID = getattr(_host_logging, "get_request_id", None)
+
+if _HOST_LOG_EVENT is None:
+    _HOST_GET_REQUEST_ID = None
 
 
 OUTCOME_SUCCESS = "success"
@@ -40,6 +44,7 @@ OUTCOME_FAILURE = "failure"
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _LOGGER = logging.getLogger("eventyay.plugins")
 _JOB_ID: ContextVar[str | None] = ContextVar("hubspot_job_id", default=None)
+_REQUEST_ID: ContextVar[str | None] = ContextVar("hubspot_request_id", default=None)
 _INT_FIELDS = frozenset(
     {
         "event_id",
@@ -56,6 +61,8 @@ _IDENTIFIER_FIELDS = frozenset(
         "backend",
         "job_name",
         "job_id",
+        "request_id",
+        "route",
         "model",
     }
 )
@@ -68,6 +75,11 @@ def _safe_identifier(value):
     return None
 
 
+def task_job_id(result):
+    """Extract a safe Celery task ID from an AsyncResult without failing on mocks."""
+    return _safe_identifier(getattr(result, "id", None))
+
+
 def _current_job_id() -> str | None:
     local_id = _JOB_ID.get()
     if local_id is not None:
@@ -75,6 +87,18 @@ def _current_job_id() -> str | None:
     if _HOST_GET_JOB_ID is not None:
         try:
             return _HOST_GET_JOB_ID()
+        except Exception:
+            return None
+    return None
+
+
+def _current_request_id() -> str | None:
+    local_id = _REQUEST_ID.get()
+    if local_id is not None:
+        return local_id
+    if _HOST_GET_REQUEST_ID is not None:
+        try:
+            return _HOST_GET_REQUEST_ID()
         except Exception:
             return None
     return None
@@ -120,6 +144,10 @@ def log_operation(action, outcome, **fields):
             current_job_id = _safe_identifier(_current_job_id())
             if current_job_id is not None:
                 payload["job_id"] = current_job_id
+        if "request_id" not in payload:
+            current_request_id = _safe_identifier(_current_request_id())
+            if current_request_id is not None:
+                payload["request_id"] = current_request_id
         if _HOST_LOG_EVENT is not None:
             try:
                 _HOST_LOG_EVENT("plugins", action, outcome, level=level, **payload)
@@ -166,13 +194,15 @@ def _send_request(method, url, **kwargs):
 
 
 def logged_request(backend, method, url, **kwargs):
-    """Log status and duration for one HTTP call.
+    """Log operation, status, duration, and retries for one HTTP call.
 
-    ``ok_statuses`` is not sent to the server. Use it when the caller already
-    treats a 4xx response as success. The same exception is re-raised.
-    The URL and body are not logged.
+    ``ok_statuses``, ``operation``, and ``retry_count`` are logging metadata
+    and are not sent to the server. The URL and body are not logged.
     """
     ok_statuses = kwargs.pop("ok_statuses", ())
+    operation = kwargs.pop("operation", None)
+    retry_count = kwargs.pop("retry_count", None)
+    route = _safe_identifier(operation) or _safe_identifier(str(method).upper())
     started = time.monotonic()
     try:
         response = _send_request(method, url, **kwargs)
@@ -181,6 +211,8 @@ def logged_request(backend, method, url, **kwargs):
             "connection.request",
             OUTCOME_FAILURE,
             backend=backend,
+            route=route,
+            retry_count=retry_count,
             error_code="timeout",
             duration_ms=_elapsed_ms(started),
         )
@@ -190,6 +222,8 @@ def logged_request(backend, method, url, **kwargs):
             "connection.request",
             OUTCOME_FAILURE,
             backend=backend,
+            route=route,
+            retry_count=retry_count,
             error_code="request_error",
             duration_ms=_elapsed_ms(started),
         )
@@ -202,6 +236,8 @@ def logged_request(backend, method, url, **kwargs):
         "connection.request",
         OUTCOME_FAILURE if failed else OUTCOME_SUCCESS,
         backend=backend,
+        route=route,
+        retry_count=retry_count,
         status=status if status_ok else None,
         duration_ms=_elapsed_ms(started),
         error_code="http_error" if failed else None,
@@ -215,8 +251,11 @@ def traced_job(job_name):
     def decorator(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
+            task_request_id = None
+            if args:
+                task_request_id = _safe_identifier(getattr(getattr(args[0], "request", None), "id", None))
             existing_job_id = _current_job_id()
-            job_id = _safe_identifier(existing_job_id) or uuid.uuid4().hex
+            job_id = _safe_identifier(existing_job_id) or task_request_id or uuid.uuid4().hex
             token = _JOB_ID.set(job_id)
             bound_host = False
             if not existing_job_id and _HOST_BIND_JOB_ID is not None:

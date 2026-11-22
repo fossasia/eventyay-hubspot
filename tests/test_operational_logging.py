@@ -11,6 +11,7 @@ from hubspot.operational_log import (
     OUTCOME_SUCCESS,
     log_operation,
     logged_request,
+    task_job_id,
     traced_job,
 )
 
@@ -28,6 +29,7 @@ def captured(monkeypatch):
     monkeypatch.setattr(operational_log, "_HOST_BIND_JOB_ID", None)
     monkeypatch.setattr(operational_log, "_HOST_RESET_JOB_ID", None)
     monkeypatch.setattr(operational_log, "_HOST_GET_JOB_ID", None)
+    monkeypatch.setattr(operational_log, "_HOST_GET_REQUEST_ID", None)
     return records
 
 
@@ -107,14 +109,25 @@ def test_logged_request_records_status_without_url(captured, monkeypatch):
     def fake_post(url, **kwargs):
         assert url == "https://example.invalid/secret"
         assert kwargs["json"]["token"] == "raw"
+        assert "operation" not in kwargs
+        assert "retry_count" not in kwargs
         return Response()
 
     monkeypatch.setattr(requests, "post", fake_post)
-    logged_request("hubspot", "POST", "https://example.invalid/secret", json={"token": "raw"})
+    logged_request(
+        "hubspot",
+        "POST",
+        "https://example.invalid/secret",
+        operation="POST:crm.objects.create",
+        retry_count=2,
+        json={"token": "raw"},
+    )
     assert captured[-1][1] == "connection.request"
     extra = captured[-1][2]
     assert extra["status"] == 201
     assert extra["outcome"] == "success"
+    assert extra["route"] == "POST:crm.objects.create"
+    assert extra["retry_count"] == 2
     assert "example.invalid" not in str(extra)
     assert "raw" not in str(extra)
 
@@ -130,6 +143,7 @@ def test_logged_request_honors_verb_mocks(captured, monkeypatch):
 
     assert called == ["get", "patch", "delete"]
     assert len(captured) == 3
+    assert [item[2]["route"] for item in captured] == ["GET", "PATCH", "DELETE"]
 
 
 def test_traced_job_correlates_job_id_and_resets(captured):
@@ -148,3 +162,35 @@ def test_traced_job_correlates_job_id_and_resets(captured):
     captured.clear()
     log_operation("plugin.loaded", OUTCOME_SUCCESS, backend="hubspot")
     assert "job_id" not in captured[0][2]
+
+
+def test_traced_job_correlates_celery_task_id_and_request_id(captured):
+    class FakeResult:
+        id = "celery-task-123"
+
+    class FakeNonStringMock:
+        id = object()
+
+    class FakeTask:
+        class Request:
+            id = "celery-task-123"
+
+        request = Request()
+
+    assert task_job_id(FakeResult()) == "celery-task-123"
+    assert task_job_id(FakeNonStringMock()) is None
+
+    @traced_job("hubspot.sync_order")
+    def run_task(self):
+        log_operation("sync.order", OUTCOME_SUCCESS, backend="hubspot", event_id=3, order_id=9)
+
+    token = operational_log._REQUEST_ID.set("req-abc-123")
+    try:
+        log_operation("sync.order_enqueue", OUTCOME_SUCCESS, backend="hubspot", job_id=task_job_id(FakeResult()))
+        run_task(FakeTask())
+    finally:
+        operational_log._REQUEST_ID.reset(token)
+
+    assert [item[1] for item in captured] == ["sync.order_enqueue", "job.start", "sync.order", "job.finish"]
+    assert {item[2]["job_id"] for item in captured} == {"celery-task-123"}
+    assert {item[2]["request_id"] for item in captured} == {"req-abc-123"}

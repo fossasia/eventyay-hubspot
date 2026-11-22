@@ -111,7 +111,15 @@ def update_record(event, object_type: str, record_id: str, properties: dict) -> 
     payload = {"properties": properties}
 
     try:
-        response = logged_request("hubspot", "PATCH", url, headers=headers, json=payload, timeout=15)
+        response = logged_request(
+            "hubspot",
+            "PATCH",
+            url,
+            operation="PATCH:crm.objects.update",
+            headers=headers,
+            json=payload,
+            timeout=15,
+        )
     except requests.exceptions.Timeout as e:
         raise HubSpotTransientError(f"Request to HubSpot timed out: {e}")
     except requests.exceptions.ConnectionError as e:
@@ -143,7 +151,15 @@ def create_record(event, object_type: str, properties: dict) -> str:
     payload = {"properties": properties}
 
     try:
-        response = logged_request("hubspot", "POST", url, headers=headers, json=payload, timeout=15)
+        response = logged_request(
+            "hubspot",
+            "POST",
+            url,
+            operation="POST:crm.objects.create",
+            headers=headers,
+            json=payload,
+            timeout=15,
+        )
     except requests.exceptions.Timeout as e:
         raise HubSpotTransientError(f"Request to HubSpot timed out: {e}")
     except requests.exceptions.ConnectionError as e:
@@ -202,7 +218,15 @@ def get_record(event, object_type: str, record_id: str, properties: list) -> dic
     params = {"properties": ",".join(properties)} if properties else {}
 
     try:
-        response = logged_request("hubspot", "GET", url, headers=headers, params=params, timeout=15)
+        response = logged_request(
+            "hubspot",
+            "GET",
+            url,
+            operation="GET:crm.objects.get",
+            headers=headers,
+            params=params,
+            timeout=15,
+        )
     except requests.exceptions.Timeout as e:
         raise HubSpotTransientError(f"Request to HubSpot timed out: {e}")
     except requests.exceptions.ConnectionError as e:

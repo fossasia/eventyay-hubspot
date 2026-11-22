@@ -34,7 +34,7 @@ from .models import (
     SyncLog,
     SyncStatus,
 )
-from .operational_log import OUTCOME_SUCCESS, log_operation
+from .operational_log import OUTCOME_SUCCESS, log_operation, task_job_id
 from .services import (
     bootstrap_event_hubspot,
     get_valid_hubspot_token,
@@ -150,13 +150,14 @@ def _enqueue_hubspot_sync(sender, order, **kwargs):
         # Deduplicate multiple signals for the same order within a short window
         cache_key = f"hubspot_sync_enqueued_{order.id}"
         if cache.add(cache_key, "1", timeout=5):
-            sync_order_to_hubspot.apply_async(args=[order.id, order.event.id], countdown=5)
+            result = sync_order_to_hubspot.apply_async(args=[order.id, order.event.id], countdown=5)
             log_operation(
                 "sync.order_enqueue",
                 OUTCOME_SUCCESS,
                 backend="hubspot",
                 event_id=order.event_id,
                 order_id=order.id,
+                job_id=task_job_id(result),
             )
 
     transaction.on_commit(enqueue_task)
