@@ -30,6 +30,7 @@ from .models import (
     SyncMode,
     SyncStatus,
 )
+from .operational_log import OUTCOME_FAILURE, OUTCOME_SUCCESS, log_operation, task_job_id, traced_job
 from .services import (
     HubSpotFetchError,
     get_hubspot_properties,
@@ -224,7 +225,7 @@ def resolve_hubspot_properties(obj: Any, object_mapping: ObjectTypeMapping) -> d
         hubspot_props = get_hubspot_properties(object_mapping.event, object_mapping.hubspot_object_type)
         hubspot_props_dict = {p["key"]: p for p in hubspot_props}
     except HubSpotFetchError as e:
-        logger.error(f"Could not load HubSpot properties: {e}")
+        logger.error("Could not load HubSpot properties (%s)", type(e).__name__)
         raise HubSpotTransientError(f"Could not load HubSpot properties: {e}") from e
 
     if not hubspot_props_dict and field_mappings.exists():
@@ -288,6 +289,7 @@ def _convert_value(value: Any, data_type: str) -> Any:
 
 
 @shared_task(bind=True, max_retries=3)
+@traced_job("hubspot.sync_order")
 def sync_order_to_hubspot(self, order_id: int, event_id: int):
     """
     Main sync task that resolves fields, applies sync modes, and pushes to HubSpot.
@@ -296,6 +298,14 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
         with scopes_disabled():
             event = Event.objects.get(id=event_id)
     except Event.DoesNotExist:
+        log_operation(
+            "sync.order",
+            OUTCOME_FAILURE,
+            backend="hubspot",
+            event_id=event_id,
+            order_id=order_id,
+            error_code="event_not_found",
+        )
         return
 
     with scope(organizer=event.organizer):
@@ -303,10 +313,26 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
 
         if not is_sync_enabled(event):
             logger.info(f"Sync is disabled for event {event_id}. Skipping.")
+            log_operation(
+                "sync.order",
+                OUTCOME_SUCCESS,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                error_code="sync_disabled",
+            )
             return
 
         if not get_valid_hubspot_token(event):
             logger.info(f"No valid HubSpot token for event {event_id}. Skipping.")
+            log_operation(
+                "sync.order",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                error_code="not_authenticated",
+            )
             return
 
         try:
@@ -320,10 +346,26 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
                 .get(id=order_id, event=event)
             )
         except Order.DoesNotExist:
+            log_operation(
+                "sync.order",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                error_code="order_not_found",
+            )
             return
 
         if order.status != Order.STATUS_PAID:
             logger.info(f"Order {order_id} is not paid (status: {order.status}). Skipping sync.")
+            log_operation(
+                "sync.order",
+                OUTCOME_SUCCESS,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                error_code="order_not_paid",
+            )
             return
 
         active_mappings = ObjectTypeMapping.objects.filter(event=event)
@@ -335,9 +377,18 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
                 status=SyncStatus.PENDING,
                 detail__order_code=order.code,
             ).delete()
+            log_operation(
+                "sync.order",
+                OUTCOME_SUCCESS,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                error_code="no_mappings",
+            )
             return
 
         try:
+            all_succeeded = True
             for object_mapping_config in active_mappings:
                 objects_to_sync = []
                 if object_mapping_config.eventyay_object_type == "order":
@@ -346,7 +397,8 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
                     objects_to_sync = list(order.positions.all())
 
                 for obj in objects_to_sync:
-                    _sync_single_object(event, object_mapping_config, obj)
+                    if not _sync_single_object(event, object_mapping_config, obj, retry_count=self.request.retries):
+                        all_succeeded = False
 
             # Clean up pending logs for this order
             SyncLog.objects.filter(
@@ -355,14 +407,36 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
                 detail__order_code=order.code,
             ).delete()
         except HubSpotTransientError as e:
+            log_operation(
+                "sync.order",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                retry_count=self.request.retries,
+                status=getattr(e, "status_code", None),
+                error_code="transient_error",
+            )
             delay = 2**self.request.retries
             retry_after = getattr(e, "retry_after_seconds", None)
             if retry_after:
                 delay = max(delay, retry_after)
             raise self.retry(exc=e, countdown=delay)
 
+        if all_succeeded:
+            log_operation("sync.order", OUTCOME_SUCCESS, backend="hubspot", event_id=event_id, order_id=order_id)
+        else:
+            log_operation(
+                "sync.order",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                error_code="object_sync_failed",
+            )
 
-def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
+
+def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any, retry_count: int | None = None) -> bool:
     content_type = ContentType.objects.get_for_model(obj)
 
     # 1. Resolve raw fields using mapping
@@ -399,12 +473,18 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
         ]
         if fill_if_empty_fields:
             try:
-                existing_properties = get_record(event, config.hubspot_object_type, existing_id, fill_if_empty_fields)
+                existing_properties = get_record(
+                    event, config.hubspot_object_type, existing_id, fill_if_empty_fields, retry_count=retry_count
+                )
             except HubSpotTransientError as e:
                 raise e
             except HubSpotPermanentError as e:
                 # If we fail to fetch, it's safer to not overwrite anything
-                logger.warning(f"Could not fetch record {existing_id} from HubSpot: {e}")
+                logger.warning(
+                    "Could not fetch record %s from HubSpot (status=%s)",
+                    existing_id,
+                    getattr(e, "status_code", None),
+                )
 
     properties_to_send = {}
     for prop, val in raw_properties.items():
@@ -447,17 +527,21 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
                 status=SyncStatus.SUCCESS,
                 detail={"message": "No properties to sync based on mappings and current values"},
             )
-        return
+        return True
 
     try:
         conflict_detected = False
         if existing_id:
             try:
-                hubspot_id = update_record(event, config.hubspot_object_type, existing_id, properties_to_send)
+                hubspot_id = update_record(
+                    event, config.hubspot_object_type, existing_id, properties_to_send, retry_count=retry_count
+                )
                 action = SyncAction.UPDATE
             except HubSpotRecordNotFoundError:
                 try:
-                    hubspot_id = create_record(event, config.hubspot_object_type, properties_to_send)
+                    hubspot_id = create_record(
+                        event, config.hubspot_object_type, properties_to_send, retry_count=retry_count
+                    )
                     action = SyncAction.CREATE
                 except HubSpotConflictError as conflict:
                     existing_id = conflict.existing_id
@@ -465,7 +549,9 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
                     conflict_detected = True
         else:
             try:
-                hubspot_id = create_record(event, config.hubspot_object_type, properties_to_send)
+                hubspot_id = create_record(
+                    event, config.hubspot_object_type, properties_to_send, retry_count=retry_count
+                )
                 action = SyncAction.CREATE
             except HubSpotConflictError as conflict:
                 existing_id = conflict.existing_id
@@ -486,11 +572,16 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
                         config.hubspot_object_type,
                         existing_id,
                         fill_if_empty_fields,
+                        retry_count=retry_count,
                     )
                 except HubSpotTransientError as e:
                     raise e
                 except HubSpotPermanentError as e:
-                    logger.warning(f"Could not fetch record {existing_id} from HubSpot on conflict: {e}")
+                    logger.warning(
+                        "Could not fetch record %s from HubSpot on conflict (status=%s)",
+                        existing_id,
+                        getattr(e, "status_code", None),
+                    )
 
             properties_to_send = {}
             for prop, val in raw_properties.items():
@@ -508,7 +599,9 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
                         properties_to_send[prop] = val
 
             if properties_to_send:
-                hubspot_id = update_record(event, config.hubspot_object_type, existing_id, properties_to_send)
+                hubspot_id = update_record(
+                    event, config.hubspot_object_type, existing_id, properties_to_send, retry_count=retry_count
+                )
             else:
                 hubspot_id = existing_id or ""
 
@@ -531,6 +624,15 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
                 direction=SyncDirection.PUSH,
                 status=SyncStatus.SUCCESS,
             )
+        log_operation(
+            "sync.object",
+            OUTCOME_SUCCESS,
+            backend="hubspot",
+            event_id=event.id,
+            model=content_type.model,
+            object_id=obj.id,
+        )
+        return True
     except HubSpotTransientError as e:
         raise e
     except HubSpotPermanentError as e:
@@ -552,9 +654,21 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any):
             status=SyncStatus.FAILED,
             detail={"error": str(e), "status_code": getattr(e, "status_code", None)},
         )
+        log_operation(
+            "sync.object",
+            OUTCOME_FAILURE,
+            backend="hubspot",
+            event_id=event.id,
+            model=content_type.model,
+            object_id=obj.id,
+            status=getattr(e, "status_code", None),
+            error_code="permanent_error",
+        )
+        return False
 
 
 @shared_task(bind=True, max_retries=3)
+@traced_job("hubspot.sync_all")
 def sync_all_mappings_task(self, event_id: int):
     """
     Background task to enqueue sync_order_to_hubspot for all orders of an event,
@@ -569,10 +683,20 @@ def sync_all_mappings_task(self, event_id: int):
 
     logger.info(f"Found {len(order_ids)} orders for event {event_id}. Queuing sync tasks.")
     for order_id in order_ids:
-        sync_order_to_hubspot.apply_async(args=[order_id, event_id], countdown=0)
+        result = sync_order_to_hubspot.apply_async(args=[order_id, event_id], countdown=0)
+        log_operation(
+            "sync.order_enqueue",
+            OUTCOME_SUCCESS,
+            backend="hubspot",
+            event_id=event_id,
+            order_id=order_id,
+            job_id=task_job_id(result),
+        )
+    log_operation("sync.batch_enqueue", OUTCOME_SUCCESS, backend="hubspot", event_id=event_id)
 
 
 @shared_task(bind=True, max_retries=3)
+@traced_job("hubspot.refresh_properties")
 def refresh_hubspot_properties_task(self, event_id: int | None, object_type: str, organizer_id: int | None = None):
     """
     Background task to refresh HubSpot properties.
@@ -605,7 +729,25 @@ def refresh_hubspot_properties_task(self, event_id: int | None, object_type: str
         cache.delete(error_key)
         cache.delete(lock_key)
         cache.delete(manual_sync_lock_key)
+        log_operation(
+            "properties.refresh",
+            OUTCOME_SUCCESS,
+            backend="hubspot",
+            event_id=event_id,
+            model="organizer" if organizer_id else "event",
+            object_id=organizer_id or event_id,
+        )
     except HubSpotFetchError as e:
+        log_operation(
+            "properties.refresh",
+            OUTCOME_FAILURE,
+            backend="hubspot",
+            event_id=event_id,
+            model="organizer" if organizer_id else "event",
+            object_id=organizer_id or event_id,
+            retry_count=self.request.retries,
+            error_code="fetch_error",
+        )
         delay = 2**self.request.retries
         retry_after = getattr(e, "retry_after", None)
         if retry_after:

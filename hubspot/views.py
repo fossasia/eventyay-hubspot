@@ -27,6 +27,8 @@ from eventyay.control.views.organizer_views.organizer_detail_view_mixin import (
     OrganizerDetailViewMixin,
 )
 
+from hubspot.operational_log import OUTCOME_FAILURE, OUTCOME_SUCCESS, log_operation, logged_request, task_job_id
+
 from .field_discovery import get_available_fields
 from .forms import (
     BaseHubSpotFieldMappingFormSet,
@@ -75,6 +77,7 @@ from .utils import get_hubspot_activity_logs
 HUBSPOT_OAUTH_SCOPES = (
     "oauth crm.objects.contacts.read crm.objects.contacts.write crm.objects.deals.read crm.objects.deals.write"
 )
+logger = logging.getLogger(__name__)
 
 
 def get_client_ip(request):
@@ -164,12 +167,20 @@ class EventHubSpotSettingsView(EventPermissionRequiredMixin, TemplateView):
                     action=AuditAction.MAPPING_UPDATED,
                     ip_address=get_client_ip(request),
                 )
+                log_operation(
+                    "settings.mappings",
+                    OUTCOME_SUCCESS,
+                    backend="hubspot",
+                    event_id=request.event.id,
+                    user_id=request.user.pk,
+                )
                 messages.success(request, _("Object mappings saved."))
                 return redirect(request.path)
         elif form_type == "settings":
             formset = self._get_formset()
             settings_form = self._get_settings_form(request.POST)
             if settings_form.is_valid():
+                settings_form.save()
                 if "auto_sync_enabled" in settings_form.changed_data:
                     is_enabled = settings_form.cleaned_data["auto_sync_enabled"]
                     action = AuditAction.AUTO_SYNC_ENABLED if is_enabled else AuditAction.AUTO_SYNC_DISABLED
@@ -179,12 +190,33 @@ class EventHubSpotSettingsView(EventPermissionRequiredMixin, TemplateView):
                         action=action,
                         ip_address=get_client_ip(request),
                     )
-                settings_form.save()
+                    log_operation(
+                        "config.enable" if is_enabled else "config.disable",
+                        OUTCOME_SUCCESS,
+                        backend="hubspot",
+                        event_id=request.event.id,
+                        user_id=request.user.pk,
+                    )
+                log_operation(
+                    "settings.update",
+                    OUTCOME_SUCCESS,
+                    backend="hubspot",
+                    event_id=request.event.id,
+                    user_id=request.user.pk,
+                )
                 messages.success(request, _("Settings saved."))
                 return redirect(request.path)
         else:
             return redirect(request.path)
 
+        log_operation(
+            "validation.failed",
+            OUTCOME_FAILURE,
+            backend="hubspot",
+            event_id=request.event.id,
+            user_id=request.user.pk,
+            error_code="validation_failed",
+        )
         messages.error(request, _("We could not save your changes. See below for details."))
         return self.render_to_response(self.get_context_data(formset=formset, settings_form=settings_form))
 
@@ -231,6 +263,13 @@ class EventHubSpotCallbackView(View):
         is_organizer_flow = len(parts) == 2
 
         if not state_token or not organizer_slug or (not is_organizer_flow and not event_slug):
+            log_operation(
+                "oauth.callback",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                user_id=request.user.pk if request.user.is_authenticated else None,
+                error_code="malformed_state",
+            )
             raise PermissionDenied(_("Invalid state parameter."))
 
         saved_state = request.session.pop("hubspot_oauth_state", None)
@@ -250,6 +289,13 @@ class EventHubSpotCallbackView(View):
             )
 
         if error:
+            log_operation(
+                "oauth.callback",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                user_id=request.user.pk if request.user.is_authenticated else None,
+                error_code="oauth_error",
+            )
             messages.error(
                 request,
                 _("HubSpot authorization failed: {}").format(error_description or error),
@@ -257,20 +303,51 @@ class EventHubSpotCallbackView(View):
             return redirect(settings_url)
 
         if not state_token or state_token != saved_state:
+            log_operation(
+                "oauth.callback",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                user_id=request.user.pk if request.user.is_authenticated else None,
+                error_code="invalid_state",
+            )
             messages.error(request, _("Invalid state parameter. Please try again."))
             return redirect(settings_url)
 
         # Verify permissions manually
         if not request.user.is_authenticated:
+            log_operation(
+                "permission.denied",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                route="oauth.callback",
+                error_code="unauthenticated",
+            )
             raise PermissionDenied()
 
         if is_organizer_flow:
             try:
                 organizer = Organizer.objects.get(slug=organizer_slug)
             except Organizer.DoesNotExist:
+                log_operation(
+                    "oauth.callback",
+                    OUTCOME_FAILURE,
+                    backend="hubspot",
+                    user_id=request.user.pk,
+                    error_code="organizer_not_found",
+                )
                 raise PermissionDenied(_("Organizer not found."))
 
             if not request.user.has_organizer_permission(organizer, "can_change_organizer_settings", request=request):
+                log_operation(
+                    "permission.denied",
+                    OUTCOME_FAILURE,
+                    backend="hubspot",
+                    model="organizer",
+                    object_id=organizer.id,
+                    user_id=request.user.pk,
+                    route="oauth.callback",
+                    error_code="forbidden",
+                )
                 raise PermissionDenied(_("You do not have permission to view this content."))
         else:
             try:
@@ -279,18 +356,37 @@ class EventHubSpotCallbackView(View):
                     organizer__slug=organizer_slug,
                 )
             except Event.DoesNotExist:
+                log_operation(
+                    "oauth.callback",
+                    OUTCOME_FAILURE,
+                    backend="hubspot",
+                    user_id=request.user.pk,
+                    error_code="event_not_found",
+                )
                 raise PermissionDenied(_("Event not found."))
 
             if not request.user.has_event_permission(
                 event.organizer, event, "can_change_event_settings", request=request
             ):
+                log_operation(
+                    "permission.denied",
+                    OUTCOME_FAILURE,
+                    backend="hubspot",
+                    event_id=event.id,
+                    user_id=request.user.pk,
+                    route="oauth.callback",
+                    error_code="forbidden",
+                )
                 raise PermissionDenied(_("You do not have permission to view this content."))
 
         gs = GlobalSettingsObject()
         redirect_uri = request.build_absolute_uri(reverse("plugins:hubspot:callback"))
 
-        response = requests.post(
+        response = logged_request(
+            "hubspot",
+            "POST",
             "https://api.hubapi.com/oauth/v1/token",
+            operation="POST:oauth.token_exchange",
             data={
                 "grant_type": "authorization_code",
                 "client_id": gs.settings.hubspot_client_id or os.environ.get("HUBSPOT_CLIENT_ID", ""),
@@ -302,6 +398,13 @@ class EventHubSpotCallbackView(View):
         )
 
         if not response.ok:
+            log_operation(
+                "oauth.callback",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                status=response.status_code,
+                error_code="token_exchange_failed",
+            )
             messages.error(request, _("Failed to exchange token with HubSpot."))
             return redirect(settings_url)
 
@@ -315,8 +418,11 @@ class EventHubSpotCallbackView(View):
         access_token = data.get("access_token", "")
         if access_token:
             try:
-                info_resp = requests.get(
+                info_resp = logged_request(
+                    "hubspot",
+                    "GET",
                     f"https://api.hubapi.com/oauth/v1/access-tokens/{access_token}",
+                    operation="GET:oauth.token_info",
                     timeout=10,
                 )
                 if info_resp.ok:
@@ -351,6 +457,14 @@ class EventHubSpotCallbackView(View):
                 )
 
                 apply_default_mappings_to_all_events(organizer)
+                log_operation(
+                    "oauth.connect",
+                    OUTCOME_SUCCESS,
+                    backend="hubspot",
+                    model="organizer",
+                    object_id=organizer.id,
+                    user_id=request.user.pk,
+                )
         else:
             with scope(organizer=event.organizer):
                 HubSpotOAuthToken.objects.update_or_create(
@@ -382,6 +496,13 @@ class EventHubSpotCallbackView(View):
                     action=AuditAction.CONNECT,
                     ip_address=get_client_ip(request),
                 )
+                log_operation(
+                    "oauth.connect",
+                    OUTCOME_SUCCESS,
+                    backend="hubspot",
+                    event_id=event.id,
+                    user_id=request.user.pk,
+                )
 
         messages.success(request, _("Successfully connected to HubSpot."))
         return redirect(settings_url)
@@ -407,13 +528,17 @@ class EventHubSpotDisconnectView(EventPermissionRequiredMixin, View):
             try:
                 # We use the refresh token to revoke, as per HubSpot docs.
                 revoke_url = f"https://api.hubapi.com/oauth/v1/refresh-tokens/{token.refresh_token}"
-                response = requests.delete(revoke_url, timeout=10)
+                response = logged_request(
+                    "hubspot",
+                    "DELETE",
+                    revoke_url,
+                    operation="DELETE:oauth.token_revoke",
+                    timeout=10,
+                )
                 if not response.ok:
-                    logger = logging.getLogger(__name__)
-                    logger.warning(f"Failed to revoke HubSpot token: {response.status_code} {response.text}")
+                    logger.warning("Failed to revoke HubSpot token (status=%s)", response.status_code)
             except requests.RequestException as e:
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Error reaching HubSpot revoke endpoint: {e}")
+                logger.warning("Error reaching HubSpot revoke endpoint (%s)", type(e).__name__)
 
             with scope(organizer=request.event.organizer):
                 token.delete()
@@ -458,6 +583,13 @@ class EventHubSpotDisconnectView(EventPermissionRequiredMixin, View):
             )
         cache.delete_many(cache_keys)
 
+        log_operation(
+            "oauth.disconnect",
+            OUTCOME_SUCCESS,
+            backend="hubspot",
+            event_id=request.event.id,
+            user_id=request.user.pk,
+        )
         messages.success(request, _("Successfully disconnected from HubSpot."))
         return redirect(settings_url)
 
@@ -598,20 +730,18 @@ class EventHubSpotFieldMappingView(EventPermissionRequiredMixin, TemplateView):
         try:
             hubspot_properties = get_hubspot_properties(request.event, mapping.hubspot_object_type)
         except Exception as e:
-            logger = logging.getLogger(__name__)
             logger.error(
-                "Failed to load HubSpot properties for event %s: %s",
+                "Failed to load HubSpot properties for event %s (%s)",
                 request.event.slug,
-                e,
+                type(e).__name__,
             )
-            sync_error = _("Could not retrieve HubSpot properties. " "Please check your connection and try again.")
+            sync_error = _("Could not retrieve HubSpot properties. Please check your connection and try again.")
             hubspot_properties = []
 
         error_key = f"hubspot_properties_error_evt_{request.event.id}_{mapping.hubspot_object_type}"
         if cache.get(error_key):
             sync_error = _(
-                "HubSpot properties sync failed repeatedly. "
-                "HubSpot may be unreachable or you might need to reconnect."
+                "HubSpot properties sync failed repeatedly. HubSpot may be unreachable or you might need to reconnect."
             )
 
         is_fetching_properties = (
@@ -655,9 +785,27 @@ class EventHubSpotFieldMappingView(EventPermissionRequiredMixin, TemplateView):
 
                 from .tasks import refresh_hubspot_properties_task
 
-                refresh_hubspot_properties_task.apply_async(args=[request.event.id, mapping.hubspot_object_type])
+                result = refresh_hubspot_properties_task.apply_async(
+                    args=[request.event.id, mapping.hubspot_object_type]
+                )
+                log_operation(
+                    "properties.refresh_enqueue",
+                    OUTCOME_SUCCESS,
+                    backend="hubspot",
+                    event_id=request.event.id,
+                    user_id=request.user.pk,
+                    job_id=task_job_id(result),
+                )
                 messages.success(request, _("Sync task started in the background."))
             else:
+                log_operation(
+                    "properties.refresh_enqueue",
+                    OUTCOME_FAILURE,
+                    backend="hubspot",
+                    event_id=request.event.id,
+                    user_id=request.user.pk,
+                    error_code="rate_limited",
+                )
                 messages.error(request, _("Please wait a moment before trying again."))
 
             clean_url = reverse(
@@ -757,6 +905,13 @@ class EventHubSpotFieldMappingView(EventPermissionRequiredMixin, TemplateView):
                 action=AuditAction.FIELD_MAPPING_UPDATED,
                 ip_address=get_client_ip(request),
             )
+            log_operation(
+                "settings.field_mappings",
+                OUTCOME_SUCCESS,
+                backend="hubspot",
+                event_id=request.event.id,
+                user_id=request.user.pk,
+            )
 
             messages.success(request, _("Field mapping configuration saved successfully."))
             return redirect(
@@ -770,6 +925,14 @@ class EventHubSpotFieldMappingView(EventPermissionRequiredMixin, TemplateView):
                 )
             )
         else:
+            log_operation(
+                "validation.failed",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                event_id=request.event.id,
+                user_id=request.user.pk,
+                error_code="validation_failed",
+            )
             messages.error(
                 request,
                 _("There were errors saving your configuration. Please check the form."),
@@ -793,6 +956,14 @@ class EventHubSpotSyncMappingView(EventPermissionRequiredMixin, View):
 
         settings = HubSpotEventSettings.objects.filter(event=request.event).first()
         if settings and settings.has_mapping_conflict:
+            log_operation(
+                "sync.all_enqueue",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                event_id=request.event.id,
+                user_id=request.user.pk,
+                error_code="mapping_conflict",
+            )
             messages.error(
                 request,
                 _("HubSpot sync is blocked due to mapping conflicts. Please resolve them first."),
@@ -801,13 +972,29 @@ class EventHubSpotSyncMappingView(EventPermissionRequiredMixin, View):
 
         token = get_valid_hubspot_token(request.event)
         if not token:
+            log_operation(
+                "sync.all_enqueue",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                event_id=request.event.id,
+                user_id=request.user.pk,
+                error_code="not_connected",
+            )
             messages.error(
                 request,
                 _("Not connected to HubSpot or sync is disabled for this event."),
             )
             return redirect(settings_url)
 
-        sync_all_mappings_task.apply_async(args=[request.event.id])
+        result = sync_all_mappings_task.apply_async(args=[request.event.id])
+        log_operation(
+            "sync.all_enqueue",
+            OUTCOME_SUCCESS,
+            backend="hubspot",
+            event_id=request.event.id,
+            user_id=request.user.pk,
+            job_id=task_job_id(result),
+        )
 
         messages.success(
             request,
@@ -901,7 +1088,16 @@ class RetrySyncView(EventPermissionRequiredMixin, View):
 
     def post(self, request, *args, **kwargs):
         order_id = kwargs["order_id"]
-        sync_order_to_hubspot.apply_async(args=[order_id, request.event.id])
+        result = sync_order_to_hubspot.apply_async(args=[order_id, request.event.id])
+        log_operation(
+            "sync.retry_enqueue",
+            OUTCOME_SUCCESS,
+            backend="hubspot",
+            event_id=request.event.id,
+            order_id=order_id,
+            user_id=request.user.pk,
+            job_id=task_job_id(result),
+        )
         messages.success(request, _("Sync retry queued."))
         return redirect(
             reverse(
@@ -923,7 +1119,23 @@ class RetryAllFailedView(EventPermissionRequiredMixin, View):
         failed_records = get_failed_sync_records(request.event)
         order_ids = {r["order_id"] for r in failed_records}
         for order_id in order_ids:
-            sync_order_to_hubspot.apply_async(args=[order_id, request.event.id])
+            result = sync_order_to_hubspot.apply_async(args=[order_id, request.event.id])
+            log_operation(
+                "sync.retry_enqueue",
+                OUTCOME_SUCCESS,
+                backend="hubspot",
+                event_id=request.event.id,
+                order_id=order_id,
+                user_id=request.user.pk,
+                job_id=task_job_id(result),
+            )
+        log_operation(
+            "sync.retry_all_enqueue",
+            OUTCOME_SUCCESS,
+            backend="hubspot",
+            event_id=request.event.id,
+            user_id=request.user.pk,
+        )
         messages.success(
             request,
             _("Retry queued for %(count)d orders.") % {"count": len(order_ids)},
@@ -956,7 +1168,24 @@ class SyncRetryBulkView(EventPermissionRequiredMixin, View):
 
             if validated_order_ids:
                 for order_id in validated_order_ids:
-                    sync_order_to_hubspot.apply_async(args=[int(order_id), request.event.id])
+                    oid = int(order_id)
+                    result = sync_order_to_hubspot.apply_async(args=[oid, request.event.id])
+                    log_operation(
+                        "sync.retry_enqueue",
+                        OUTCOME_SUCCESS,
+                        backend="hubspot",
+                        event_id=request.event.id,
+                        order_id=oid,
+                        user_id=request.user.pk,
+                        job_id=task_job_id(result),
+                    )
+                log_operation(
+                    "sync.retry_bulk_enqueue",
+                    OUTCOME_SUCCESS,
+                    backend="hubspot",
+                    event_id=request.event.id,
+                    user_id=request.user.pk,
+                )
                 messages.success(
                     request,
                     _("Retry queued for %(count)d orders.") % {"count": len(validated_order_ids)},
@@ -1010,6 +1239,14 @@ class DismissSyncView(EventPermissionRequiredMixin, View):
             status=SyncStatus.SUCCESS,
             detail={"message": "Dismissed by organizer"},
         )
+        log_operation(
+            "sync.dismiss",
+            OUTCOME_SUCCESS,
+            backend="hubspot",
+            event_id=request.event.id,
+            object_id=log_id,
+            user_id=request.user.pk,
+        )
         messages.success(request, _("Sync record dismissed."))
         return redirect(
             reverse(
@@ -1033,6 +1270,15 @@ class SyncOrderNowView(EventPermissionRequiredMixin, View):
             order = Order.objects.get(code=order_code, event=request.event)
 
             if order.status != Order.STATUS_PAID:
+                log_operation(
+                    "sync.order_enqueue",
+                    OUTCOME_FAILURE,
+                    backend="hubspot",
+                    event_id=request.event.id,
+                    order_id=order.id,
+                    user_id=request.user.pk,
+                    error_code="order_not_paid",
+                )
                 messages.error(request, _("Only paid orders can be synced."))
                 return redirect(
                     reverse(
@@ -1065,7 +1311,16 @@ class SyncOrderNowView(EventPermissionRequiredMixin, View):
                 },
             )
 
-            sync_order_to_hubspot.apply_async(args=[order.id, request.event.id])
+            result = sync_order_to_hubspot.apply_async(args=[order.id, request.event.id])
+            log_operation(
+                "sync.order_enqueue",
+                OUTCOME_SUCCESS,
+                backend="hubspot",
+                event_id=request.event.id,
+                order_id=order.id,
+                user_id=request.user.pk,
+                job_id=task_job_id(result),
+            )
             messages.success(request, _("Sync task queued."))
         except Order.DoesNotExist:
             messages.error(request, _("Order not found."))
@@ -1281,6 +1536,14 @@ class OrganizerHubSpotSettingsView(OrganizerPermissionRequiredMixin, OrganizerDe
                 action=AuditAction.ORG_TOGGLE,
                 ip_address=get_client_ip(request),
             )
+            log_operation(
+                "settings.organizer_update",
+                OUTCOME_SUCCESS,
+                backend="hubspot",
+                model="organizer",
+                object_id=request.organizer.id,
+                user_id=request.user.pk,
+            )
             messages.success(request, _("Settings saved."))
 
         elif form_type == "events_toggle":
@@ -1311,6 +1574,14 @@ class OrganizerHubSpotSettingsView(OrganizerPermissionRequiredMixin, OrganizerDe
                     action=AuditAction.ORG_TOGGLE,
                     ip_address=get_client_ip(request),
                 )
+                log_operation(
+                    "settings.organizer_update",
+                    OUTCOME_SUCCESS,
+                    backend="hubspot",
+                    model="organizer",
+                    object_id=request.organizer.id,
+                    user_id=request.user.pk,
+                )
 
             messages.success(request, _("Event sync settings saved."))
 
@@ -1325,9 +1596,26 @@ class OrganizerHubSpotSettingsView(OrganizerPermissionRequiredMixin, OrganizerDe
                     ip_address=get_client_ip(request),
                 )
                 apply_default_mappings_to_all_events(request.organizer)
+                log_operation(
+                    "settings.organizer_update",
+                    OUTCOME_SUCCESS,
+                    backend="hubspot",
+                    model="organizer",
+                    object_id=request.organizer.id,
+                    user_id=request.user.pk,
+                )
                 messages.success(request, _("Default object mappings saved."))
                 return redirect(request.path)
             else:
+                log_operation(
+                    "validation.failed",
+                    OUTCOME_FAILURE,
+                    backend="hubspot",
+                    model="organizer",
+                    object_id=request.organizer.id,
+                    user_id=request.user.pk,
+                    error_code="validation_failed",
+                )
                 messages.error(request, _("We could not save your changes. See below for details."))
                 return self.render_to_response(self.get_context_data(default_mappings_formset=formset))
 
@@ -1383,13 +1671,17 @@ class OrganizerHubSpotDisconnectView(OrganizerPermissionRequiredMixin, View):
         # Attempt to revoke at HubSpot
         try:
             revoke_url = f"https://api.hubapi.com/oauth/v1/refresh-tokens/{token.refresh_token}"
-            response = requests.delete(revoke_url, timeout=10)
+            response = logged_request(
+                "hubspot",
+                "DELETE",
+                revoke_url,
+                operation="DELETE:oauth.token_revoke",
+                timeout=10,
+            )
             if not response.ok:
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Failed to revoke HubSpot organizer token: {response.status_code} {response.text}")
+                logger.warning("Failed to revoke HubSpot organizer token (status=%s)", response.status_code)
         except requests.RequestException as e:
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Error reaching HubSpot revoke endpoint: {e}")
+            logger.warning("Error reaching HubSpot revoke endpoint (%s)", type(e).__name__)
 
         with scope(organizer=request.organizer):
             token.delete()
@@ -1401,6 +1693,14 @@ class OrganizerHubSpotDisconnectView(OrganizerPermissionRequiredMixin, View):
                 ip_address=get_client_ip(request),
             )
 
+        log_operation(
+            "oauth.disconnect",
+            OUTCOME_SUCCESS,
+            backend="hubspot",
+            model="organizer",
+            object_id=request.organizer.id,
+            user_id=request.user.pk,
+        )
         messages.success(request, _("Successfully disconnected from HubSpot."))
         return redirect(settings_url)
 
@@ -1463,20 +1763,18 @@ class OrganizerHubSpotDefaultMappingView(OrganizerPermissionRequiredMixin, Templ
                 organizer=request.organizer,
             )
         except Exception as e:
-            logger = logging.getLogger(__name__)
             logger.error(
-                "Failed to load HubSpot properties for organizer %s: %s",
+                "Failed to load HubSpot properties for organizer %s (%s)",
                 request.organizer.slug,
-                e,
+                type(e).__name__,
             )
-            sync_error = _("Could not retrieve HubSpot properties. " "Please check your connection and try again.")
+            sync_error = _("Could not retrieve HubSpot properties. Please check your connection and try again.")
             hubspot_properties = []
 
         error_key = f"hubspot_properties_error_org_{request.organizer.id}_{mapping.hubspot_object_type}"
         if cache.get(error_key):
             sync_error = _(
-                "HubSpot properties sync failed repeatedly. "
-                "HubSpot may be unreachable or you might need to reconnect."
+                "HubSpot properties sync failed repeatedly. HubSpot may be unreachable or you might need to reconnect."
             )
 
         is_fetching_properties = (
@@ -1522,11 +1820,29 @@ class OrganizerHubSpotDefaultMappingView(OrganizerPermissionRequiredMixin, Templ
 
                 from .tasks import refresh_hubspot_properties_task
 
-                refresh_hubspot_properties_task.apply_async(
+                result = refresh_hubspot_properties_task.apply_async(
                     args=[None, mapping.hubspot_object_type, request.organizer.id]
+                )
+                log_operation(
+                    "properties.refresh_enqueue",
+                    OUTCOME_SUCCESS,
+                    backend="hubspot",
+                    model="organizer",
+                    object_id=request.organizer.id,
+                    user_id=request.user.pk,
+                    job_id=task_job_id(result),
                 )
                 messages.success(request, _("Sync task started in the background."))
             else:
+                log_operation(
+                    "properties.refresh_enqueue",
+                    OUTCOME_FAILURE,
+                    backend="hubspot",
+                    model="organizer",
+                    object_id=request.organizer.id,
+                    user_id=request.user.pk,
+                    error_code="rate_limited",
+                )
                 messages.error(request, _("Please wait a moment before trying again."))
 
             clean_url = reverse(
@@ -1586,6 +1902,14 @@ class OrganizerHubSpotDefaultMappingView(OrganizerPermissionRequiredMixin, Templ
                 action=AuditAction.FIELD_MAPPING_UPDATED,
                 ip_address=get_client_ip(request),
             )
+            log_operation(
+                "settings.default_field_mappings",
+                OUTCOME_SUCCESS,
+                backend="hubspot",
+                model="organizer",
+                object_id=request.organizer.id,
+                user_id=request.user.pk,
+            )
 
             messages.success(request, _("Default field mapping configuration saved successfully."))
             return redirect(
@@ -1598,6 +1922,15 @@ class OrganizerHubSpotDefaultMappingView(OrganizerPermissionRequiredMixin, Templ
                 )
             )
         else:
+            log_operation(
+                "validation.failed",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                model="organizer",
+                object_id=request.organizer.id,
+                user_id=request.user.pk,
+                error_code="validation_failed",
+            )
             messages.error(
                 request,
                 _("There were errors saving your configuration. Please check the form."),

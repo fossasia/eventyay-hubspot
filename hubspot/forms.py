@@ -357,10 +357,7 @@ class BaseOrganizerDefaultObjectTypeMappingFormSet(forms.BaseInlineFormSet):
                 continue
             if pair in seen:
                 raise forms.ValidationError(
-                    _(
-                        "Duplicate mapping: each eventyay / HubSpot object-type "
-                        "pair may only appear once per organizer."
-                    )
+                    _("Duplicate mapping: each eventyay / HubSpot object-type pair may only appear once per organizer.")
                 )
             seen.add(pair)
         super().clean()
