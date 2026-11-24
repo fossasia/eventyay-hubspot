@@ -189,6 +189,13 @@ class EventHubSpotSettingsView(EventPermissionRequiredMixin, TemplateView):
                         action=action,
                         ip_address=get_client_ip(request),
                     )
+                    log_operation(
+                        "config.enable" if is_enabled else "config.disable",
+                        OUTCOME_SUCCESS,
+                        backend="hubspot",
+                        event_id=request.event.id,
+                        user_id=request.user.pk,
+                    )
                 settings_form.save()
                 log_operation(
                     "settings.update",
@@ -202,6 +209,14 @@ class EventHubSpotSettingsView(EventPermissionRequiredMixin, TemplateView):
         else:
             return redirect(request.path)
 
+        log_operation(
+            "validation.failed",
+            OUTCOME_FAILURE,
+            backend="hubspot",
+            event_id=request.event.id,
+            user_id=request.user.pk,
+            error_code="validation_failed",
+        )
         messages.error(request, _("We could not save your changes. See below for details."))
         return self.render_to_response(self.get_context_data(formset=formset, settings_form=settings_form))
 
@@ -910,6 +925,14 @@ class EventHubSpotFieldMappingView(EventPermissionRequiredMixin, TemplateView):
                 )
             )
         else:
+            log_operation(
+                "validation.failed",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                event_id=request.event.id,
+                user_id=request.user.pk,
+                error_code="validation_failed",
+            )
             messages.error(
                 request,
                 _("There were errors saving your configuration. Please check the form."),
@@ -1584,6 +1607,15 @@ class OrganizerHubSpotSettingsView(OrganizerPermissionRequiredMixin, OrganizerDe
                 messages.success(request, _("Default object mappings saved."))
                 return redirect(request.path)
             else:
+                log_operation(
+                    "validation.failed",
+                    OUTCOME_FAILURE,
+                    backend="hubspot",
+                    model="organizer",
+                    object_id=request.organizer.id,
+                    user_id=request.user.pk,
+                    error_code="validation_failed",
+                )
                 messages.error(request, _("We could not save your changes. See below for details."))
                 return self.render_to_response(self.get_context_data(default_mappings_formset=formset))
 
@@ -1890,6 +1922,15 @@ class OrganizerHubSpotDefaultMappingView(OrganizerPermissionRequiredMixin, Templ
                 )
             )
         else:
+            log_operation(
+                "validation.failed",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                model="organizer",
+                object_id=request.organizer.id,
+                user_id=request.user.pk,
+                error_code="validation_failed",
+            )
             messages.error(
                 request,
                 _("There were errors saving your configuration. Please check the form."),

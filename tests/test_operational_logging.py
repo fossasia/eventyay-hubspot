@@ -194,3 +194,82 @@ def test_traced_job_correlates_celery_task_id_and_request_id(captured):
     assert [item[1] for item in captured] == ["sync.order_enqueue", "job.start", "sync.order", "job.finish"]
     assert {item[2]["job_id"] for item in captured} == {"celery-task-123"}
     assert {item[2]["request_id"] for item in captured} == {"req-abc-123"}
+
+
+def test_logged_request_http_failure(captured, monkeypatch):
+    class ErrorResponse:
+        status_code = 500
+
+    monkeypatch.setattr(requests, "get", lambda url, **kw: ErrorResponse())
+
+    logged_request(
+        "hubspot", "GET", "https://api.hubapi.com/crm/v3/objects/contacts/123", operation="GET:crm.objects.get"
+    )
+    assert captured[-1][1] == "connection.request"
+    extra = captured[-1][2]
+    assert extra["outcome"] == "failure"
+    assert extra["status"] == 500
+    assert extra["error_code"] == "http_error"
+    assert extra["route"] == "GET:crm.objects.get"
+
+
+def test_logged_request_tolerates_ok_statuses(captured, monkeypatch):
+    class ConflictResponse:
+        status_code = 409
+
+    class NotFoundResponse:
+        status_code = 404
+
+    monkeypatch.setattr(requests, "post", lambda url, **kw: ConflictResponse())
+    logged_request(
+        "hubspot",
+        "POST",
+        "https://api.hubapi.com/crm/v3/objects/contacts",
+        operation="POST:crm.objects.create",
+        ok_statuses=(409,),
+    )
+    extra_409 = captured[-1][2]
+    assert extra_409["outcome"] == "success"
+    assert extra_409["status"] == 409
+    assert "error_code" not in extra_409
+
+    monkeypatch.setattr(requests, "patch", lambda url, **kw: NotFoundResponse())
+    logged_request(
+        "hubspot",
+        "PATCH",
+        "https://api.hubapi.com/crm/v3/objects/contacts/123",
+        operation="PATCH:crm.objects.update",
+        ok_statuses=(404,),
+    )
+    extra_404 = captured[-1][2]
+    assert extra_404["outcome"] == "success"
+    assert extra_404["status"] == 404
+    assert "error_code" not in extra_404
+
+
+def test_domain_failure_drops_sensitive_fields(captured):
+    log_operation(
+        "validation.failed",
+        OUTCOME_FAILURE,
+        backend="hubspot",
+        event_id=42,
+        user_id=10,
+        error_code="validation_failed",
+        email="operator@example.org",
+        secret_token="tok_live_123",
+        raw_error="Internal database details at postgres://...",
+    )
+    assert len(captured) == 1
+    action = captured[0][1]
+    extra = captured[0][2]
+    assert action == "validation.failed"
+    assert extra["outcome"] == "failure"
+    assert extra["error_code"] == "validation_failed"
+    assert extra["event_id"] == 42
+    assert extra["user_id"] == 10
+    assert "email" not in extra
+    assert "secret_token" not in extra
+    assert "raw_error" not in extra
+    assert "operator@example.org" not in str(extra)
+    assert "tok_live_123" not in str(extra)
+    assert "postgres" not in str(extra)

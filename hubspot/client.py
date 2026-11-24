@@ -92,7 +92,7 @@ def _raise_for_status(response: requests.Response) -> None:
     )
 
 
-def update_record(event, object_type: str, record_id: str, properties: dict) -> str:
+def update_record(event, object_type: str, record_id: str, properties: dict, retry_count: int | None = None) -> str:
     """
     Updates an existing HubSpot record.
     Raises HubSpotTransientError or HubSpotPermanentError on failure.
@@ -119,6 +119,8 @@ def update_record(event, object_type: str, record_id: str, properties: dict) -> 
             headers=headers,
             json=payload,
             timeout=15,
+            ok_statuses=(404,),
+            retry_count=retry_count,
         )
     except requests.exceptions.Timeout as e:
         raise HubSpotTransientError(f"Request to HubSpot timed out: {e}")
@@ -131,7 +133,7 @@ def update_record(event, object_type: str, record_id: str, properties: dict) -> 
     return str(record_id)
 
 
-def create_record(event, object_type: str, properties: dict) -> str:
+def create_record(event, object_type: str, properties: dict, retry_count: int | None = None) -> str:
     """
     Creates a new HubSpot record.
     If a 409 Conflict is returned with an existing ID, falls back to updating that record.
@@ -159,6 +161,8 @@ def create_record(event, object_type: str, properties: dict) -> str:
             headers=headers,
             json=payload,
             timeout=15,
+            ok_statuses=(409,),
+            retry_count=retry_count,
         )
     except requests.exceptions.Timeout as e:
         raise HubSpotTransientError(f"Request to HubSpot timed out: {e}")
@@ -199,7 +203,7 @@ def create_record(event, object_type: str, properties: dict) -> str:
     return str(response.json()["id"])
 
 
-def get_record(event, object_type: str, record_id: str, properties: list) -> dict:
+def get_record(event, object_type: str, record_id: str, properties: list, retry_count: int | None = None) -> dict:
     """
     Fetches an existing HubSpot record to get its properties.
     Raises HubSpotTransientError or HubSpotPermanentError on failure.
@@ -226,6 +230,7 @@ def get_record(event, object_type: str, record_id: str, properties: list) -> dic
             headers=headers,
             params=params,
             timeout=15,
+            retry_count=retry_count,
         )
     except requests.exceptions.Timeout as e:
         raise HubSpotTransientError(f"Request to HubSpot timed out: {e}")

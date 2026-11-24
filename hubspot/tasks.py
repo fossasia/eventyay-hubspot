@@ -298,6 +298,14 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
         with scopes_disabled():
             event = Event.objects.get(id=event_id)
     except Event.DoesNotExist:
+        log_operation(
+            "sync.order",
+            OUTCOME_FAILURE,
+            backend="hubspot",
+            event_id=event_id,
+            order_id=order_id,
+            error_code="event_not_found",
+        )
         return
 
     with scope(organizer=event.organizer):
@@ -305,10 +313,26 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
 
         if not is_sync_enabled(event):
             logger.info(f"Sync is disabled for event {event_id}. Skipping.")
+            log_operation(
+                "sync.order",
+                OUTCOME_SUCCESS,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                error_code="sync_disabled",
+            )
             return
 
         if not get_valid_hubspot_token(event):
             logger.info(f"No valid HubSpot token for event {event_id}. Skipping.")
+            log_operation(
+                "sync.order",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                error_code="not_authenticated",
+            )
             return
 
         try:
@@ -322,10 +346,26 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
                 .get(id=order_id, event=event)
             )
         except Order.DoesNotExist:
+            log_operation(
+                "sync.order",
+                OUTCOME_FAILURE,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                error_code="order_not_found",
+            )
             return
 
         if order.status != Order.STATUS_PAID:
             logger.info(f"Order {order_id} is not paid (status: {order.status}). Skipping sync.")
+            log_operation(
+                "sync.order",
+                OUTCOME_SUCCESS,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                error_code="order_not_paid",
+            )
             return
 
         active_mappings = ObjectTypeMapping.objects.filter(event=event)
@@ -337,6 +377,14 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
                 status=SyncStatus.PENDING,
                 detail__order_code=order.code,
             ).delete()
+            log_operation(
+                "sync.order",
+                OUTCOME_SUCCESS,
+                backend="hubspot",
+                event_id=event_id,
+                order_id=order_id,
+                error_code="no_mappings",
+            )
             return
 
         try:
@@ -349,7 +397,7 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
                     objects_to_sync = list(order.positions.all())
 
                 for obj in objects_to_sync:
-                    if not _sync_single_object(event, object_mapping_config, obj):
+                    if not _sync_single_object(event, object_mapping_config, obj, retry_count=self.request.retries):
                         all_succeeded = False
 
             # Clean up pending logs for this order
@@ -388,7 +436,7 @@ def sync_order_to_hubspot(self, order_id: int, event_id: int):
             )
 
 
-def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any) -> bool:
+def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any, retry_count: int | None = None) -> bool:
     content_type = ContentType.objects.get_for_model(obj)
 
     # 1. Resolve raw fields using mapping
@@ -425,7 +473,9 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any) -> bo
         ]
         if fill_if_empty_fields:
             try:
-                existing_properties = get_record(event, config.hubspot_object_type, existing_id, fill_if_empty_fields)
+                existing_properties = get_record(
+                    event, config.hubspot_object_type, existing_id, fill_if_empty_fields, retry_count=retry_count
+                )
             except HubSpotTransientError as e:
                 raise e
             except HubSpotPermanentError as e:
@@ -483,11 +533,15 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any) -> bo
         conflict_detected = False
         if existing_id:
             try:
-                hubspot_id = update_record(event, config.hubspot_object_type, existing_id, properties_to_send)
+                hubspot_id = update_record(
+                    event, config.hubspot_object_type, existing_id, properties_to_send, retry_count=retry_count
+                )
                 action = SyncAction.UPDATE
             except HubSpotRecordNotFoundError:
                 try:
-                    hubspot_id = create_record(event, config.hubspot_object_type, properties_to_send)
+                    hubspot_id = create_record(
+                        event, config.hubspot_object_type, properties_to_send, retry_count=retry_count
+                    )
                     action = SyncAction.CREATE
                 except HubSpotConflictError as conflict:
                     existing_id = conflict.existing_id
@@ -495,7 +549,9 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any) -> bo
                     conflict_detected = True
         else:
             try:
-                hubspot_id = create_record(event, config.hubspot_object_type, properties_to_send)
+                hubspot_id = create_record(
+                    event, config.hubspot_object_type, properties_to_send, retry_count=retry_count
+                )
                 action = SyncAction.CREATE
             except HubSpotConflictError as conflict:
                 existing_id = conflict.existing_id
@@ -516,6 +572,7 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any) -> bo
                         config.hubspot_object_type,
                         existing_id,
                         fill_if_empty_fields,
+                        retry_count=retry_count,
                     )
                 except HubSpotTransientError as e:
                     raise e
@@ -542,7 +599,9 @@ def _sync_single_object(event: Event, config: ObjectTypeMapping, obj: Any) -> bo
                         properties_to_send[prop] = val
 
             if properties_to_send:
-                hubspot_id = update_record(event, config.hubspot_object_type, existing_id, properties_to_send)
+                hubspot_id = update_record(
+                    event, config.hubspot_object_type, existing_id, properties_to_send, retry_count=retry_count
+                )
             else:
                 hubspot_id = existing_id or ""
 
