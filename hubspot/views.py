@@ -180,6 +180,7 @@ class EventHubSpotSettingsView(EventPermissionRequiredMixin, TemplateView):
             formset = self._get_formset()
             settings_form = self._get_settings_form(request.POST)
             if settings_form.is_valid():
+                settings_form.save()
                 if "auto_sync_enabled" in settings_form.changed_data:
                     is_enabled = settings_form.cleaned_data["auto_sync_enabled"]
                     action = AuditAction.AUTO_SYNC_ENABLED if is_enabled else AuditAction.AUTO_SYNC_DISABLED
@@ -196,7 +197,6 @@ class EventHubSpotSettingsView(EventPermissionRequiredMixin, TemplateView):
                         event_id=request.event.id,
                         user_id=request.user.pk,
                     )
-                settings_form.save()
                 log_operation(
                     "settings.update",
                     OUTCOME_SUCCESS,
